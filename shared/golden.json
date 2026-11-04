@@ -1,0 +1,168 @@
+{
+  "_comment": "Golden condivisi fra sast-engine (Rust) e ai-pipeline (Python). Le stringhe multi-riga sono array di righe da unire con \\n. Cambiare questo file = cambiare il contratto prompt/matching: rigenerare i dati di training.",
+  "normalize": [
+    { "input": "std::memcpy", "expected": "std.memcpy" },
+    { "input": "ctx->buf->copy", "expected": "ctx.buf.copy" },
+    { "input": " cursor . execute ", "expected": "cursor.execute" },
+    { "input": "os.path.join", "expected": "os.path.join" }
+  ],
+  "callee_matches": [
+    { "pattern": "execute", "callee": "cursor.execute", "expected": true },
+    { "pattern": "execute", "callee": "self.db.execute", "expected": true },
+    { "pattern": "execute", "callee": "execute", "expected": true },
+    { "pattern": "execute", "callee": "executemany", "expected": false },
+    { "pattern": "os.system", "callee": "os.system", "expected": true },
+    { "pattern": "os.system", "callee": "myos.system", "expected": false },
+    { "pattern": "memcpy", "callee": "std::memcpy", "expected": true },
+    { "pattern": "memcpy", "callee": "ctx->memcpy", "expected": true },
+    { "pattern": "memcpy", "callee": "my_memcpy", "expected": false },
+    { "pattern": "free", "callee": "g_free", "expected": false },
+    { "pattern": "subprocess.run", "callee": "x.subprocess.run", "expected": true }
+  ],
+  "kb_match": [
+    { "lang": "python", "callee": "cursor.execute", "cwe": "CWE-89" },
+    { "lang": "python", "callee": "self.db.execute", "cwe": "CWE-89" },
+    { "lang": "python", "callee": "os.system", "cwe": "CWE-78" },
+    { "lang": "python", "callee": "pickle.loads", "cwe": "CWE-502" },
+    { "lang": "python", "callee": "print", "cwe": null },
+    { "lang": "python", "callee": "strcpy", "cwe": null },
+    { "lang": "c", "callee": "strcpy", "cwe": "CWE-120" },
+    { "lang": "c", "callee": "system", "cwe": "CWE-78" },
+    { "lang": "c", "callee": "malloc", "cwe": "CWE-190" },
+    { "lang": "c", "callee": "free", "cwe": "CWE-416" },
+    { "lang": "c", "callee": "my_strcpy", "cwe": null },
+    { "lang": "cpp", "callee": "std::memcpy", "cwe": "CWE-120" }
+  ],
+  "alias": [
+    { "label": "CWE-787", "cwe": "CWE-120" },
+    { "label": "CWE-119", "cwe": "CWE-120" },
+    { "label": "CWE-89", "cwe": "CWE-89" },
+    { "label": "CWE-9999", "cwe": null }
+  ],
+  "card": {
+    "entry": {
+      "id": "CWE-89",
+      "name": "SQL Injection",
+      "aliases": [],
+      "default_severity": "HIGH",
+      "summary": "Query SQL costruita con input non fidato.",
+      "indicators": ["Concatenazione o f-string nella query", "Input da request/argv"],
+      "safe_patterns": ["Query parametrizzate"],
+      "fix_hint": "Usare query parametrizzate.",
+      "sinks": { "python": ["execute"], "c": [] }
+    },
+    "expected_lines": [
+      "CWE-89 — SQL Injection",
+      "Descrizione: Query SQL costruita con input non fidato.",
+      "Indicatori di vulnerabilità:",
+      "- Concatenazione o f-string nella query",
+      "- Input da request/argv",
+      "Pattern sicuri:",
+      "- Query parametrizzate"
+    ]
+  },
+  "prompts": [
+    {
+      "name": "due blocchi python",
+      "cwe_id": "CWE-89",
+      "cwe_card_lines": [
+        "CWE-89 — SQL Injection",
+        "Descrizione: Query SQL costruita con input non fidato.",
+        "Indicatori di vulnerabilità:",
+        "- Concatenazione o f-string nella query",
+        "- Input da request/argv",
+        "Pattern sicuri:",
+        "- Query parametrizzate"
+      ],
+      "sink": { "function": "cursor.execute", "file": "src/db/orders.py", "line": 45 },
+      "blocks": [
+        {
+          "file": "src/routes.py",
+          "name": "get_orders",
+          "start_line": 10,
+          "end_line": 12,
+          "depth": 1,
+          "lang": "python",
+          "code_lines": ["def get_orders():", "    uid = request.args['id']", "    return fetch(uid)"]
+        },
+        {
+          "file": "src/db/orders.py",
+          "name": "fetch",
+          "start_line": 44,
+          "end_line": 45,
+          "depth": 0,
+          "lang": "python",
+          "code_lines": ["def fetch(uid):", "    cursor.execute(f\"SELECT * FROM users WHERE id={uid}\")"]
+        }
+      ],
+      "expected_user_lines": [
+        "## Regola CWE",
+        "CWE-89 — SQL Injection",
+        "Descrizione: Query SQL costruita con input non fidato.",
+        "Indicatori di vulnerabilità:",
+        "- Concatenazione o f-string nella query",
+        "- Input da request/argv",
+        "Pattern sicuri:",
+        "- Query parametrizzate",
+        "",
+        "## Sink candidato",
+        "- Funzione: cursor.execute",
+        "- File: src/db/orders.py",
+        "- Riga: 45",
+        "",
+        "## Traccia di codice (dal chiamante più esterno al sink)",
+        "### src/routes.py · get_orders (righe 10-12, profondità 1)",
+        "```python",
+        "   10 | def get_orders():",
+        "   11 |     uid = request.args['id']",
+        "   12 |     return fetch(uid)",
+        "```",
+        "",
+        "### src/db/orders.py · fetch (righe 44-45, profondità 0)",
+        "```python",
+        "   44 | def fetch(uid):",
+        "   45 |     cursor.execute(f\"SELECT * FROM users WHERE id={uid}\")",
+        "```",
+        "",
+        "## Compito",
+        "Valuta se il sink `cursor.execute` è vulnerabile a CWE-89. Se non lo è, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\"."
+      ]
+    },
+    {
+      "name": "placeholder nel codice e CRLF restano letterali",
+      "cwe_id": "CWE-1",
+      "cwe_card_lines": ["CARD"],
+      "sink": { "function": "f", "file": "a.c", "line": 1 },
+      "blocks": [
+        {
+          "file": "a.c",
+          "name": "f",
+          "start_line": 1,
+          "end_line": 2,
+          "depth": 0,
+          "lang": "c",
+          "code_crlf": "x = '{cwe_id}';\r\ny = '{sink_file}';\r\n"
+        }
+      ],
+      "expected_user_lines": [
+        "## Regola CWE",
+        "CARD",
+        "",
+        "## Sink candidato",
+        "- Funzione: f",
+        "- File: a.c",
+        "- Riga: 1",
+        "",
+        "## Traccia di codice (dal chiamante più esterno al sink)",
+        "### a.c · f (righe 1-2, profondità 0)",
+        "```c",
+        "    1 | x = '{cwe_id}';",
+        "    2 | y = '{sink_file}';",
+        "```",
+        "",
+        "## Compito",
+        "Valuta se il sink `f` è vulnerabile a CWE-1. Se non lo è, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\"."
+      ]
+    }
+  ]
+}

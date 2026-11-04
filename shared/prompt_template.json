@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "system": "Sei un analizzatore di sicurezza SAST. Ricevi la regola di una CWE, un sink candidato e la traccia di codice (backward slice) che lo raggiunge. Stabilisci se il sink è realmente vulnerabile a quella CWE: i dati non fidati devono raggiungere il sink senza validazione o sanificazione adeguata. Rispondi ESCLUSIVAMENTE con un oggetto JSON conforme allo schema richiesto. Scrivi \"reasoning\" e \"suggested_fix\" in italiano, citando file e righe.",
+  "user": "## Regola CWE\n{cwe_card}\n\n## Sink candidato\n- Funzione: {sink_function}\n- File: {sink_file}\n- Riga: {sink_line}\n\n## Traccia di codice (dal chiamante più esterno al sink)\n{trace}\n\n## Compito\nValuta se il sink `{sink_function}` è vulnerabile a {cwe_id}. Se non lo è, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\".",
+  "block_header": "### {file} · {name} (righe {start_line}-{end_line}, profondità {depth})"
+}

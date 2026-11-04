@@ -1,0 +1,15 @@
+# artefatti pesanti / rigenerabili
+sast-engine/target/
+ai-pipeline/data/raw/
+ai-pipeline/data/.benign_tmp.jsonl
+.venv/
+.venv-quant/
+.venv-vllm/
+unsloth_compiled_cache/
+model_bf16/
+model_fp8/
+model_nvfp4/
+outputs/
+results/
+__pycache__/
+*.pyc

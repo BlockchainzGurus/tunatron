@@ -1,0 +1,450 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "CWE-78",
+      "name": "OS Command Injection",
+      "aliases": ["CWE-77", "CWE-88"],
+      "default_severity": "CRITICAL",
+      "summary": "Un comando di sistema viene costruito o eseguito usando input non fidato senza neutralizzare i metacaratteri della shell.",
+      "indicators": [
+        "Input utente concatenato o interpolato in una stringa passata a system/popen/os.system/subprocess",
+        "subprocess con shell=True e argomenti costruiti da dati esterni",
+        "Nomi di file o parametri non validati usati come argomento di un eseguibile"
+      ],
+      "safe_patterns": [
+        "Lista di argomenti senza shell (subprocess.run([...], shell=False)) o execv con argv fisso",
+        "Allowlist rigida dei valori ammessi prima dell'esecuzione"
+      ],
+      "fix_hint": "Evitare la shell: passare gli argomenti come lista (shell=False / execv), validare con allowlist e non concatenare input non fidato nel comando.",
+      "sinks": {
+        "python": ["os.system", "os.popen", "subprocess.call", "subprocess.run", "subprocess.Popen", "subprocess.check_output", "subprocess.check_call", "subprocess.getoutput"],
+        "c": ["system", "popen", "execl", "execlp", "execle", "execv", "execvp", "execve"]
+      }
+    },
+    {
+      "id": "CWE-89",
+      "name": "SQL Injection",
+      "aliases": ["CWE-564"],
+      "default_severity": "HIGH",
+      "summary": "Una query SQL viene costruita con input non fidato senza parametrizzazione, permettendo di alterare la struttura della query.",
+      "indicators": [
+        "Concatenazione, % formatting, str.format o f-string con dati esterni dentro la stringa SQL",
+        "Parametri provenienti da request/argv/form raggiungono execute() senza bind dei parametri",
+        "snprintf/sprintf usato per comporre la query prima di mysql_query/sqlite3_exec"
+      ],
+      "safe_patterns": [
+        "Query parametrizzate o prepared statement con placeholder (%s, ?, :name) e valori passati separatamente",
+        "ORM con filtri parametrizzati"
+      ],
+      "fix_hint": "Usare query parametrizzate: cursor.execute('SELECT * FROM users WHERE id = %s', (uid,)) invece di comporre la stringa SQL.",
+      "sinks": {
+        "python": ["execute", "executemany", "executescript"],
+        "c": ["sqlite3_exec", "mysql_query", "mysql_real_query", "PQexec"]
+      }
+    },
+    {
+      "id": "CWE-94",
+      "name": "Code Injection",
+      "aliases": ["CWE-95"],
+      "default_severity": "CRITICAL",
+      "summary": "Codice generato dinamicamente da input non fidato viene valutato o eseguito dall'interprete.",
+      "indicators": [
+        "eval/exec/compile applicati a stringhe che contengono dati esterni",
+        "Input utente usato per costruire espressioni o script poi eseguiti"
+      ],
+      "safe_patterns": [
+        "ast.literal_eval per soli letterali",
+        "Dispatch tramite tabella di funzioni predefinite al posto di eval"
+      ],
+      "fix_hint": "Eliminare eval/exec su dati esterni: usare ast.literal_eval o una tabella di dispatch con valori validati tramite allowlist.",
+      "sinks": {
+        "python": ["eval", "exec", "compile"],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-502",
+      "name": "Deserialization of Untrusted Data",
+      "aliases": [],
+      "default_severity": "HIGH",
+      "summary": "Dati non fidati vengono deserializzati con un formato che può istanziare oggetti arbitrari ed eseguire codice.",
+      "indicators": [
+        "pickle/marshal/dill/jsonpickle applicati a dati ricevuti dalla rete o da file non fidati",
+        "yaml.load senza SafeLoader su input esterno"
+      ],
+      "safe_patterns": [
+        "Formati dati puri come JSON con validazione dello schema",
+        "yaml.safe_load",
+        "Dati firmati (HMAC) verificati prima della deserializzazione"
+      ],
+      "fix_hint": "Sostituire pickle/marshal con JSON validato oppure usare yaml.safe_load; firmare e verificare i payload prima di deserializzarli.",
+      "sinks": {
+        "python": ["pickle.loads", "pickle.load", "cPickle.loads", "marshal.loads", "marshal.load", "dill.loads", "jsonpickle.decode", "yaml.load", "yaml.unsafe_load", "shelve.open"],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-22",
+      "name": "Path Traversal",
+      "aliases": ["CWE-23", "CWE-36"],
+      "default_severity": "HIGH",
+      "summary": "Un percorso di file costruito con input non fidato non viene normalizzato e può uscire dalla directory prevista.",
+      "indicators": [
+        "Input utente concatenato a una directory base e passato a open/fopen/send_file senza normalizzazione",
+        "Presenza di sequenze '../' non neutralizzate o percorsi assoluti accettati",
+        "extractall su archivi non fidati senza controllo dei nomi dei membri"
+      ],
+      "safe_patterns": [
+        "Risoluzione con realpath/resolve e verifica che il risultato resti sotto la directory base",
+        "send_from_directory o secure_filename sul nome ricevuto"
+      ],
+      "fix_hint": "Normalizzare il percorso (realpath/resolve) e verificare che resti dentro la directory base; usare secure_filename o send_from_directory.",
+      "sinks": {
+        "python": ["send_file", "send_from_directory", "extractall"],
+        "c": ["fopen", "open", "openat", "opendir", "unlink"]
+      }
+    },
+    {
+      "id": "CWE-120",
+      "name": "Buffer Copy without Checking Size of Input (Classic Buffer Overflow)",
+      "aliases": ["CWE-119", "CWE-121", "CWE-122", "CWE-124", "CWE-125", "CWE-126", "CWE-127", "CWE-129", "CWE-131", "CWE-193", "CWE-787", "CWE-805"],
+      "default_severity": "HIGH",
+      "summary": "Dati vengono copiati in un buffer di dimensione fissa senza verificare che la lunghezza dell'input stia nel buffer di destinazione. Rientrano anche le letture e scritture fuori dai limiti (CWE-125/787) dovute a indici o lunghezze non validati.",
+      "indicators": [
+        "strcpy/strcat/sprintf/gets su buffer di dimensione fissa con sorgente di lunghezza non controllata",
+        "memcpy/memmove con lunghezza derivata da input esterno senza confronto con la capacità della destinazione",
+        "Calcoli sulla lunghezza che possono andare in underflow o overflow prima della copia",
+        "Indice o offset derivato da input esterno usato per accedere a un array o buffer senza controllo dei limiti"
+      ],
+      "safe_patterns": [
+        "Controllo esplicito len <= sizeof(dst) (o capacità allocata) prima della copia",
+        "snprintf/strlcpy con dimensione corretta della destinazione e gestione del troncamento"
+      ],
+      "fix_hint": "Verificare la lunghezza rispetto alla capacità della destinazione prima di copiare, oppure usare varianti con limite (snprintf, strlcpy) e gestire il troncamento.",
+      "sinks": {
+        "python": [],
+        "c": ["strcpy", "strcat", "sprintf", "vsprintf", "gets", "memcpy", "memmove", "strncpy", "strncat", "strlcpy", "strlcat", "strscpy", "snprintf", "vsnprintf", "wcscpy", "wcsncpy", "wcscat", "wmemcpy", "copy_from_user", "copy_to_user", "memcpy_fromio", "memcpy_toio", "kmemdup"]
+      }
+    },
+    {
+      "id": "CWE-190",
+      "name": "Integer Overflow or Wraparound",
+      "aliases": ["CWE-189", "CWE-191", "CWE-194", "CWE-195", "CWE-197", "CWE-680"],
+      "default_severity": "HIGH",
+      "summary": "Un calcolo aritmetico su valori controllati dall'esterno può andare in overflow e produrre una dimensione errata usata per allocazioni o indici.",
+      "indicators": [
+        "Moltiplicazione o somma di dimensioni derivate da input passata a malloc/calloc/realloc senza controllo di overflow",
+        "Conversioni tra tipi con segno e senza segno su lunghezze"
+      ],
+      "safe_patterns": [
+        "Controllo preventivo dell'overflow (es. size > SIZE_MAX / n) o uso di calloc con conteggio separato",
+        "Funzioni aritmetiche checked (__builtin_mul_overflow)"
+      ],
+      "fix_hint": "Controllare l'overflow prima di allocare (SIZE_MAX / n) oppure usare __builtin_mul_overflow / calloc con elementi e dimensione separati.",
+      "sinks": {
+        "python": [],
+        "c": ["malloc", "calloc", "realloc", "alloca", "kmalloc", "kzalloc", "kcalloc", "kvmalloc", "vmalloc", "g_malloc", "g_malloc0", "xmalloc", "OPENSSL_malloc", "av_malloc", "av_mallocz"]
+      }
+    },
+    {
+      "id": "CWE-416",
+      "name": "Use After Free",
+      "aliases": ["CWE-415", "CWE-825"],
+      "default_severity": "HIGH",
+      "summary": "Un puntatore viene usato o liberato di nuovo dopo che la memoria a cui punta è già stata liberata.",
+      "indicators": [
+        "Il puntatore non viene azzerato dopo free e viene riutilizzato su un percorso successivo",
+        "Più percorsi di errore liberano la stessa risorsa (double free)",
+        "Riferimenti a un oggetto mantenuti in altre strutture dopo la liberazione"
+      ],
+      "safe_patterns": [
+        "Puntatore impostato a NULL subito dopo free e controllato prima dell'uso",
+        "Proprietà della memoria con un unico punto di rilascio (goto cleanup)"
+      ],
+      "fix_hint": "Impostare il puntatore a NULL dopo free, centralizzare il rilascio in un solo punto di uscita e non mantenere riferimenti all'oggetto liberato.",
+      "sinks": {
+        "python": [],
+        "c": ["free", "kfree", "kvfree", "vfree", "g_free", "av_free", "av_freep", "OPENSSL_free"]
+      }
+    },
+    {
+      "id": "CWE-327",
+      "name": "Use of a Broken or Risky Cryptographic Algorithm",
+      "aliases": ["CWE-328"],
+      "default_severity": "MEDIUM",
+      "summary": "Viene usato un algoritmo crittografico o di hash debole (MD5, SHA-1, DES, RC4) per proteggere dati sensibili o per scopi di sicurezza.",
+      "indicators": [
+        "MD5/SHA-1 usati per hash di password, firme o controlli di integrità con avversario",
+        "DES/3DES/RC4 per cifrare dati"
+      ],
+      "safe_patterns": [
+        "SHA-256 o superiore per integrità; bcrypt/scrypt/argon2 per le password",
+        "AES-GCM o ChaCha20-Poly1305 per la cifratura",
+        "MD5/SHA-1 usati solo per checksum non legati alla sicurezza"
+      ],
+      "fix_hint": "Sostituire l'algoritmo con SHA-256+ (integrità), argon2/bcrypt (password) o AES-GCM/ChaCha20-Poly1305 (cifratura).",
+      "sinks": {
+        "python": ["hashlib.md5", "hashlib.sha1", "DES.new", "ARC4.new"],
+        "c": ["MD5", "MD5_Init", "SHA1", "SHA1_Init", "DES_ecb_encrypt", "RC4", "EVP_md5", "EVP_sha1"]
+      }
+    },
+    {
+      "id": "CWE-918",
+      "name": "Server-Side Request Forgery (SSRF)",
+      "aliases": [],
+      "default_severity": "HIGH",
+      "summary": "Il server effettua una richiesta verso un URL controllato dall'utente, permettendo di raggiungere servizi interni.",
+      "indicators": [
+        "URL o host provenienti da input esterno passati a requests/urllib/httpx senza allowlist",
+        "Assenza di controllo su schemi, indirizzi privati e redirect"
+      ],
+      "safe_patterns": [
+        "Allowlist di host/URL consentiti",
+        "Risoluzione DNS e blocco di indirizzi interni (loopback, link-local, RFC1918) prima della richiesta"
+      ],
+      "fix_hint": "Validare l'URL con una allowlist di host e schemi, bloccare indirizzi interni e disabilitare i redirect non necessari.",
+      "sinks": {
+        "python": ["requests.get", "requests.post", "requests.put", "requests.delete", "requests.head", "requests.request", "urllib.request.urlopen", "urlopen", "httpx.get", "httpx.post"],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-79",
+      "name": "Cross-site Scripting (XSS)",
+      "aliases": ["CWE-80"],
+      "default_severity": "MEDIUM",
+      "summary": "Input non fidato viene inserito in una pagina HTML senza escaping, permettendo l'esecuzione di script nel browser della vittima.",
+      "indicators": [
+        "render_template_string/Markup/mark_safe applicati a dati dell'utente",
+        "HTML composto per concatenazione con parametri della richiesta"
+      ],
+      "safe_patterns": [
+        "Template con autoescape attivo e variabili passate come contesto",
+        "markupsafe.escape sui dati prima di marcarli sicuri"
+      ],
+      "fix_hint": "Lasciare l'autoescape attivo, passare i dati come variabili di template e non marcare come sicuro contenuto controllato dall'utente.",
+      "sinks": {
+        "python": ["render_template_string", "mark_safe", "Markup"],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-476",
+      "name": "NULL Pointer Dereference",
+      "aliases": [
+        "CWE-690"
+      ],
+      "default_severity": "MEDIUM",
+      "summary": "Un puntatore che può essere NULL viene dereferenziato senza controllo, causando crash o comportamento indefinito.",
+      "indicators": [
+        "Valore restituito da malloc/calloc/lookup/parser usato senza verificare NULL",
+        "Percorsi di errore che lasciano un puntatore non inizializzato e poi lo dereferenziano",
+        "Campi opzionali di strutture usati senza verifica"
+      ],
+      "safe_patterns": [
+        "Controllo esplicito if (!ptr) con gestione dell'errore prima dell'uso",
+        "Invarianti che garantiscono la non-nullità su tutti i percorsi"
+      ],
+      "fix_hint": "Controllare il puntatore (if (!ptr) return -ENOMEM;) prima di dereferenziarlo e gestire tutti i percorsi di errore.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-369",
+      "name": "Divide By Zero",
+      "aliases": [],
+      "default_severity": "MEDIUM",
+      "summary": "Un divisore controllato dall'esterno può valere zero e la divisione o il modulo non lo verifica.",
+      "indicators": [
+        "Divisione o modulo per un valore letto da input, file o rete senza controllo",
+        "Rapporti calcolati su contatori o dimensioni che possono essere zero"
+      ],
+      "safe_patterns": [
+        "Controllo esplicito divisore != 0 prima dell'operazione",
+        "Validazione del valore alla lettura dell'input"
+      ],
+      "fix_hint": "Verificare che il divisore sia diverso da zero prima di dividere e rifiutare gli input non validi.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-20",
+      "name": "Improper Input Validation",
+      "aliases": [
+        "CWE-1284"
+      ],
+      "default_severity": "MEDIUM",
+      "summary": "L'input non viene validato (tipo, lunghezza, intervallo, formato) prima di essere usato, aprendo la strada ad altri difetti.",
+      "indicators": [
+        "Campi di un pacchetto, file o argomento usati direttamente come lunghezza, indice o offset",
+        "Mancanza di controlli su intervalli e consistenza fra campi"
+      ],
+      "safe_patterns": [
+        "Validazione esplicita di intervalli e lunghezze subito dopo la lettura",
+        "Parser che rifiutano input malformati"
+      ],
+      "fix_hint": "Validare tipo, lunghezza e intervallo dei campi in ingresso prima dell'uso e scartare gli input non conformi.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-200",
+      "name": "Exposure of Sensitive Information to an Unauthorized Actor",
+      "aliases": [
+        "CWE-201",
+        "CWE-209"
+      ],
+      "default_severity": "MEDIUM",
+      "summary": "Informazioni sensibili (memoria non inizializzata, segreti, dettagli interni) vengono esposte a chi non dovrebbe vederle.",
+      "indicators": [
+        "Strutture copiate verso l'utente senza azzerare padding o campi non inizializzati",
+        "Messaggi di errore o log che includono dati interni o segreti"
+      ],
+      "safe_patterns": [
+        "Azzeramento della memoria prima della copia verso l'esterno (memset/kzalloc)",
+        "Messaggi di errore generici"
+      ],
+      "fix_hint": "Inizializzare o azzerare i dati prima di esporli e ridurre i messaggi di errore alle sole informazioni necessarie.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-362",
+      "name": "Race Condition (Concurrent Execution using Shared Resource with Improper Synchronization)",
+      "aliases": [
+        "CWE-366",
+        "CWE-367"
+      ],
+      "default_severity": "MEDIUM",
+      "summary": "Una risorsa condivisa è usata da più flussi senza sincronizzazione adeguata, con esiti dipendenti dalla temporizzazione.",
+      "indicators": [
+        "Controllo e uso separati dello stesso stato (check-then-act) senza lock",
+        "Accesso a variabili condivise da thread o interrupt senza mutex o operazioni atomiche"
+      ],
+      "safe_patterns": [
+        "Lock acquisito per tutta la sezione critica",
+        "Operazioni atomiche o strutture lock-free corrette"
+      ],
+      "fix_hint": "Proteggere la sezione critica con un lock coerente oppure usare operazioni atomiche, eliminando la finestra fra controllo e uso.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-401",
+      "name": "Missing Release of Memory after Effective Lifetime (Memory Leak)",
+      "aliases": [
+        "CWE-404",
+        "CWE-772"
+      ],
+      "default_severity": "LOW",
+      "summary": "La memoria o un'altra risorsa allocata non viene rilasciata su tutti i percorsi, causando esaurimento nel tempo.",
+      "indicators": [
+        "Percorsi di errore che escono senza liberare ciò che è stato allocato",
+        "Riassegnazione di un puntatore senza liberare il valore precedente"
+      ],
+      "safe_patterns": [
+        "Un solo punto di uscita con cleanup (goto cleanup)",
+        "Gestione automatica delle risorse (RAII, smart pointer)"
+      ],
+      "fix_hint": "Liberare ogni risorsa su tutti i percorsi di uscita, centralizzando il cleanup in un unico punto.",
+      "sinks": {
+        "python": [],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-601",
+      "name": "URL Redirection to Untrusted Site (Open Redirect)",
+      "aliases": [],
+      "default_severity": "MEDIUM",
+      "summary": "L'applicazione reindirizza l'utente verso un URL controllato dall'input senza verificarne la destinazione.",
+      "indicators": [
+        "URL o parametro 'next' della richiesta passato direttamente a redirect()/HttpResponseRedirect",
+        "Controlli solo sul prefisso o su sottostringhe dell'URL, aggirabili"
+      ],
+      "safe_patterns": [
+        "Allowlist di destinazioni o percorsi relativi interni",
+        "url_has_allowed_host_and_scheme / is_safe_url prima del redirect"
+      ],
+      "fix_hint": "Reindirizzare solo verso percorsi interni o host in allowlist, validando con url_has_allowed_host_and_scheme prima di chiamare redirect.",
+      "sinks": {
+        "python": [
+          "redirect",
+          "HttpResponseRedirect",
+          "HttpResponsePermanentRedirect"
+        ],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-611",
+      "name": "Improper Restriction of XML External Entity Reference (XXE)",
+      "aliases": [
+        "CWE-776"
+      ],
+      "default_severity": "HIGH",
+      "summary": "Un parser XML elabora entità esterne definite dall'input, permettendo lettura di file locali o richieste verso servizi interni.",
+      "indicators": [
+        "etree/minidom/sax usati su XML ricevuto dall'esterno con il parser predefinito",
+        "Parser lxml con resolve_entities attivo o con accesso alla rete consentito"
+      ],
+      "safe_patterns": [
+        "defusedxml al posto dei parser della libreria standard",
+        "Parser configurato senza risoluzione di entità e senza accesso alla rete"
+      ],
+      "fix_hint": "Usare defusedxml oppure un parser con resolve_entities=False e no_network=True.",
+      "sinks": {
+        "python": [
+          "etree.parse",
+          "etree.fromstring",
+          "etree.XML",
+          "etree.iterparse",
+          "minidom.parse",
+          "minidom.parseString",
+          "sax.parse",
+          "sax.parseString",
+          "ElementTree.parse",
+          "ElementTree.fromstring"
+        ],
+        "c": []
+      }
+    },
+    {
+      "id": "CWE-377",
+      "name": "Insecure Temporary File",
+      "aliases": [
+        "CWE-379"
+      ],
+      "default_severity": "MEDIUM",
+      "summary": "Un file temporaneo viene creato con un nome prevedibile e non in modo atomico, aprendo a race condition e symlink attack.",
+      "indicators": [
+        "tempfile.mktemp / os.tempnam: restituiscono solo un nome, il file va aperto dopo",
+        "Nomi in /tmp costruiti con pid, timestamp o valori prevedibili"
+      ],
+      "safe_patterns": [
+        "tempfile.mkstemp, NamedTemporaryFile o TemporaryDirectory",
+        "Creazione con O_EXCL e permessi restrittivi"
+      ],
+      "fix_hint": "Usare tempfile.mkstemp()/NamedTemporaryFile(), che creano il file in modo atomico con permessi restrittivi.",
+      "sinks": {
+        "python": [
+          "tempfile.mktemp",
+          "os.tempnam",
+          "os.tmpnam"
+        ],
+        "c": []
+      }
+    }
+  ]
+}

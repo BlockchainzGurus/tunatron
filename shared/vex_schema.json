@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "vulnerable": { "type": "boolean" },
+    "cwe_id": { "type": "string" },
+    "severity": { "type": "string", "enum": ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "sink_function": { "type": "string" },
+    "sink_file": { "type": "string" },
+    "sink_line": { "type": "integer" },
+    "vex_status": { "type": "string", "enum": ["affected", "not_affected"] },
+    "reasoning": { "type": "string" },
+    "suggested_fix": { "type": "string" }
+  },
+  "required": [
+    "vulnerable",
+    "cwe_id",
+    "severity",
+    "sink_function",
+    "sink_file",
+    "sink_line",
+    "vex_status",
+    "reasoning",
+    "suggested_fix"
+  ],
+  "additionalProperties": false
+}

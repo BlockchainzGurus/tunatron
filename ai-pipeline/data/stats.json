@@ -1,0 +1,419 @@
+{
+  "test": {
+    "available": {
+      "benign": 2149,
+      "patched": 13849,
+      "vulnerable": 1176
+    },
+    "by_source": {
+      "codeql-tests": {
+        "available": {
+          "benign": 0,
+          "patched": 8,
+          "vulnerable": 24
+        },
+        "kept": {
+          "patched": 7,
+          "vulnerable": 7
+        },
+        "kept_localized": {
+          "comment": 14
+        },
+        "kept_sink_kind": {
+          "call": 14
+        },
+        "skipped": {}
+      },
+      "cvefixes-python": {
+        "available": {
+          "benign": 0,
+          "patched": 84,
+          "vulnerable": 84
+        },
+        "kept": {
+          "patched": 58,
+          "vulnerable": 58
+        },
+        "kept_localized": {
+          "None": 8,
+          "diff": 108
+        },
+        "kept_sink_kind": {
+          "call": 24,
+          "function": 92
+        },
+        "skipped": {
+          "cwe_not_in_kb": 114,
+          "too_long": 4
+        }
+      },
+      "juliet": {
+        "available": {
+          "benign": 0,
+          "patched": 0,
+          "vulnerable": 0
+        },
+        "kept": {},
+        "kept_localized": {},
+        "kept_sink_kind": {},
+        "skipped": {}
+      },
+      "primevul": {
+        "available": {
+          "benign": 2139,
+          "patched": 12833,
+          "vulnerable": 366
+        },
+        "kept": {
+          "patched": 1098,
+          "vulnerable": 366
+        },
+        "kept_localized": {
+          "None": 1142,
+          "diff": 322
+        },
+        "kept_sink_kind": {
+          "call": 67,
+          "function": 1397
+        },
+        "skipped": {
+          "cwe_not_in_kb": 5071,
+          "no_sink": 4100,
+          "too_long": 279
+        }
+      },
+      "secvuleval": {
+        "available": {
+          "benign": 10,
+          "patched": 924,
+          "vulnerable": 702
+        },
+        "kept": {
+          "benign": 10,
+          "patched": 922,
+          "vulnerable": 690
+        },
+        "kept_localized": {
+          "None": 298,
+          "diff": 1324
+        },
+        "kept_sink_kind": {
+          "call": 80,
+          "function": 1542
+        },
+        "skipped": {
+          "cwe_not_in_kb": 529,
+          "no_sink": 66,
+          "too_long": 82
+        }
+      }
+    },
+    "duplicates_removed": {
+      "duplicate": 34
+    },
+    "function_level_dropped": 0,
+    "kept": {
+      "benign": 10,
+      "patched": 2110,
+      "vulnerable": 1146
+    },
+    "kept_localized": {
+      "None": 1448,
+      "comment": 14,
+      "diff": 1804
+    },
+    "kept_sink_kind": {
+      "call": 213,
+      "function": 3053
+    },
+    "label_skew_dropped": 0,
+    "skipped": {
+      "cwe_not_in_kb": 5714,
+      "no_sink": 4166,
+      "too_long": 365
+    }
+  },
+  "train": {
+    "available": {
+      "benign": 4449,
+      "patched": 117630,
+      "vulnerable": 12986
+    },
+    "by_source": {
+      "codeql-tests": {
+        "available": {
+          "benign": 0,
+          "patched": 243,
+          "vulnerable": 475
+        },
+        "kept": {
+          "patched": 124,
+          "vulnerable": 119
+        },
+        "kept_localized": {
+          "comment": 243
+        },
+        "kept_sink_kind": {
+          "call": 243
+        },
+        "skipped": {}
+      },
+      "cvefixes-python": {
+        "available": {
+          "benign": 0,
+          "patched": 856,
+          "vulnerable": 856
+        },
+        "kept": {
+          "patched": 167,
+          "vulnerable": 252
+        },
+        "kept_localized": {
+          "None": 16,
+          "diff": 403
+        },
+        "kept_sink_kind": {
+          "call": 179,
+          "function": 240
+        },
+        "skipped": {
+          "cwe_not_in_kb": 1319,
+          "too_long": 37
+        }
+      },
+      "juliet": {
+        "available": {
+          "benign": 0,
+          "patched": 283,
+          "vulnerable": 1770
+        },
+        "kept": {
+          "patched": 276,
+          "vulnerable": 849
+        },
+        "kept_localized": {
+          "comment": 1125
+        },
+        "kept_sink_kind": {
+          "call": 1125
+        },
+        "skipped": {
+          "cwe_not_in_kb": 2270
+        }
+      },
+      "primevul": {
+        "available": {
+          "benign": 4308,
+          "patched": 107898,
+          "vulnerable": 3356
+        },
+        "kept": {
+          "patched": 680,
+          "vulnerable": 812
+        },
+        "kept_localized": {
+          "None": 844,
+          "diff": 648
+        },
+        "kept_sink_kind": {
+          "call": 359,
+          "function": 1133
+        },
+        "skipped": {
+          "cwe_not_in_kb": 35867,
+          "no_sink": 22321,
+          "too_long": 2047
+        }
+      },
+      "secvuleval": {
+        "available": {
+          "benign": 141,
+          "patched": 8350,
+          "vulnerable": 6529
+        },
+        "kept": {
+          "patched": 1356,
+          "vulnerable": 1197
+        },
+        "kept_localized": {
+          "None": 549,
+          "diff": 2004
+        },
+        "kept_sink_kind": {
+          "call": 421,
+          "function": 2132
+        },
+        "skipped": {
+          "cwe_not_in_kb": 5183,
+          "no_sink": 688,
+          "too_long": 1011
+        }
+      }
+    },
+    "duplicates_removed": {
+      "duplicate": 1492,
+      "in_test": 413
+    },
+    "function_level_dropped": 15320,
+    "kept": {
+      "patched": 2660,
+      "vulnerable": 3325
+    },
+    "kept_localized": {
+      "None": 1409,
+      "comment": 1368,
+      "diff": 3208
+    },
+    "kept_sink_kind": {
+      "call": 2471,
+      "function": 3514
+    },
+    "label_skew_dropped": 1043,
+    "skipped": {
+      "cwe_not_in_kb": 44639,
+      "no_sink": 23009,
+      "too_long": 3095
+    }
+  },
+  "val": {
+    "available": {
+      "benign": 638,
+      "patched": 15221,
+      "vulnerable": 975
+    },
+    "by_source": {
+      "codeql-tests": {
+        "available": {
+          "benign": 0,
+          "patched": 3,
+          "vulnerable": 27
+        },
+        "kept": {
+          "patched": 2,
+          "vulnerable": 9
+        },
+        "kept_localized": {
+          "comment": 11
+        },
+        "kept_sink_kind": {
+          "call": 11
+        },
+        "skipped": {}
+      },
+      "cvefixes-python": {
+        "available": {
+          "benign": 0,
+          "patched": 43,
+          "vulnerable": 43
+        },
+        "kept": {
+          "patched": 11,
+          "vulnerable": 10
+        },
+        "kept_localized": {
+          "diff": 21
+        },
+        "kept_sink_kind": {
+          "call": 4,
+          "function": 17
+        },
+        "skipped": {
+          "cwe_not_in_kb": 40,
+          "too_long": 2
+        }
+      },
+      "juliet": {
+        "available": {
+          "benign": 0,
+          "patched": 20,
+          "vulnerable": 94
+        },
+        "kept": {
+          "patched": 20,
+          "vulnerable": 43
+        },
+        "kept_localized": {
+          "comment": 63
+        },
+        "kept_sink_kind": {
+          "call": 63
+        },
+        "skipped": {
+          "cwe_not_in_kb": 134
+        }
+      },
+      "primevul": {
+        "available": {
+          "benign": 636,
+          "patched": 14665,
+          "vulnerable": 422
+        },
+        "kept": {
+          "patched": 77,
+          "vulnerable": 82
+        },
+        "kept_localized": {
+          "None": 96,
+          "diff": 63
+        },
+        "kept_sink_kind": {
+          "call": 42,
+          "function": 117
+        },
+        "skipped": {
+          "cwe_not_in_kb": 4524,
+          "no_sink": 3469,
+          "too_long": 232
+        }
+      },
+      "secvuleval": {
+        "available": {
+          "benign": 2,
+          "patched": 490,
+          "vulnerable": 389
+        },
+        "kept": {
+          "patched": 64,
+          "vulnerable": 73
+        },
+        "kept_localized": {
+          "None": 22,
+          "diff": 115
+        },
+        "kept_sink_kind": {
+          "call": 37,
+          "function": 100
+        },
+        "skipped": {
+          "cwe_not_in_kb": 272,
+          "no_sink": 28,
+          "too_long": 44
+        }
+      }
+    },
+    "duplicates_removed": {
+      "duplicate": 14,
+      "in_test": 26
+    },
+    "function_level_dropped": 1344,
+    "kept": {
+      "patched": 179,
+      "vulnerable": 223
+    },
+    "kept_localized": {
+      "None": 118,
+      "comment": 74,
+      "diff": 210
+    },
+    "kept_sink_kind": {
+      "call": 168,
+      "function": 234
+    },
+    "label_skew_dropped": 66,
+    "skipped": {
+      "cwe_not_in_kb": 4970,
+      "no_sink": 3497,
+      "too_long": 278
+    }
+  }
+}
