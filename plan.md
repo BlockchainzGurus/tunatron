@@ -27,7 +27,7 @@
 - [ ] **1.2 Creazione Virtualenv Python (uv) e compilazione kernel Mamba-2 per Blackwell:**
   - Crea ambiente: `uv venv --python 3.12 && source .venv/bin/activate`
   - Installa PyTorch compatibile CUDA 13+, Unsloth, TRL, `mamba-ssm`, `causal-conv1d`, `llm-compressor` e `vllm`.
-  - *Stato:* `scripts/setup_env.sh` pronto (provato solo con `DRY_RUN=1`; due venv; compilazione kernel con tetto di RAM).
+  - *Stato:* `scripts/setup_env.sh` aggiornato (provato con `DRY_RUN=1` e `ai-pipeline/tests/test_setup_env.py`; tre venv; versioni fissate; kernel Mamba con patch C++20, costruiti uno alla volta con tetto di RAM; mai eseguito end to end).
 - [x] **1.3 Creazione Dataset (`prepare_data.py`):**
   - Scarica il dataset base (*PrimeVul* o *Juliet Test Suite*).
   - Estrai e formatta gli esempi nel file `train.jsonl` e `val.jsonl` seguendo lo schema `Slicing + CWE -> JSON VEX`.

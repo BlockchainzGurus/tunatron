@@ -71,7 +71,8 @@ Tunatron/
 # Verifica compatibilità driver e configurazione CUDA
 scripts/check_env.sh
 
-# Installazione dei virtualenv Python (.venv, .venv-quant, .venv-vllm)
+# Installazione dei virtualenv Python (.venv, .venv-quant, .venv-vllm) sul PC; ENVS=quant per crearne uno solo.
+# Su Google Colab non serve: il notebook ha già i suoi passi.
 scripts/setup_env.sh
 ```
 
@@ -245,7 +246,7 @@ Il modulo `prepare_data.py` genera esempi di addestramento strutturati nel forma
 - **Target DoRA e Moduli Mamba:** L'adapter DoRA è applicato a `q/k/v/o_proj`, `up/down_proj` e al modulo Mamba `in_proj`. I layer `out_proj` e `conv1d` sono esclusi poiché i kernel fusi di Mamba accedono direttamente ai pesi sottostanti, ignorando l'adapter in PEFT.
 - **Loss con LM Head Fusa:** Con il vocabolario esteso di Nemotron, il calcolo della loss sull'intero vocabolario genererebbe picchi di memoria incompatibili con 16 GB di VRAM. Il training impiega una testa LM fusa (`fused_compute_loss`) che calcola i logit e la cross-entropy unicamente per i token supervisionati.
 - **Stabilità Numerica di DoRA:** È stata integrata una soglia minima (`patch_dora_dead_rows`) nel calcolo di `magnitude / weight_norm` per gestire tensori a norma zero presenti in alcuni layer `in_proj` di Mamba, prevenendo gradienti NaN durante l'addestramento.
-- **Isolamento degli Ambienti Virtuali:** Per gestire requisiti divergenti di PyTorch, Transformers e kernel CUDA compilati (`mamba-ssm`, `causal-conv1d`), la pipeline prevede tre ambienti virtuali dedicati: `.venv` (training con Unsloth), `.venv-quant` (quantizzazione con NVIDIA ModelOpt) e `.venv-vllm` (serving ad alte prestazioni).
+- **Isolamento degli Ambienti Virtuali:** Per gestire requisiti divergenti di PyTorch, Transformers e kernel CUDA compilati (`mamba-ssm`, `causal-conv1d`), la pipeline prevede tre ambienti virtuali dedicati: `.venv` (training con Unsloth), `.venv-quant` (quantizzazione con NVIDIA ModelOpt) e `.venv-vllm` (serving ad alte prestazioni). I due kernel si scaricano da PyPI con `-std=c++17` portato a `c++20` (`ai-pipeline/patched_sdist.py`: torch ≥ 2.14 non compila con C++17) e si costruiscono uno alla volta, con tetto di RAM; torch e lo stack di training sono fissati alle versioni provate (`PIN_VERSIONS=0` per le ultime).
 - **Architettura Rust Senza Dipendenze Monolitiche:** Il microservizio Rust interagisce con Git tramite chiamate dirette al binario di sistema (con timeout e quote di dimensione) e implementa un encoder ABI / JSON-RPC nativo per le chiamate EVM, eliminando dipendenze ingombranti quali `libgit2` o interi SDK Web3.
 - **Specifica CycloneDX VEX:** Le segnalazioni sono mappate secondo lo standard CycloneDX (`analysis.state = "exploitable"` per sink vulnerabili, `"not_affected"` per sink sicuri, `"in_triage"` per casi ambigui), mantenendo lo stato dettagliato nelle properties del componente.
 - **Determinismo delle Coordinate del Sink:** File, riga e funzione del sink riportati nell'output finale sono ancorati ai metadati estratti staticamente da Tree-sitter, evitando possibili discrepanze o allucinazioni di coordinate da parte dell'LLM.
