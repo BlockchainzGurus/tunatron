@@ -93,6 +93,74 @@ class FirstSupportedTests(unittest.TestCase):
             train.first_supported(self.factory, [{"nope": 1}])
 
 
+class LengthGroupingTests(unittest.TestCase):
+    """Senza raggruppamento ogni micro-batch è riempito fino alla sequenza più lunga che contiene: ~22% di calcolo sprecato a 2 x 4."""
+
+    def test_transformers_5_names_the_option_train_sampling_strategy(self):
+        def config(*, output_dir, train_sampling_strategy="random"):
+            return None
+
+        self.assertEqual(train.length_grouping_kwargs(config), {"train_sampling_strategy": "group_by_length"})
+
+    def test_older_transformers_use_the_boolean_flag(self):
+        def config(*, output_dir, group_by_length=False):
+            return None
+
+        self.assertEqual(train.length_grouping_kwargs(config), {"group_by_length": True})
+
+    def test_a_config_that_cannot_group_is_an_error_not_a_silent_random_order(self):
+        def config(*, output_dir):
+            return None
+
+        with self.assertRaises(ValueError):
+            train.length_grouping_kwargs(config)
+
+    @unittest.skipUnless(importlib.util.find_spec("trl"), "serve trl: eseguire con .venv/bin/python")
+    def test_the_sft_config_asks_for_length_grouping(self):
+        from trl import SFTConfig
+
+        kwargs = train.sft_config_kwargs(train.parse_args([]), SFTConfig)
+        self.assertTrue(kwargs.get("train_sampling_strategy") == "group_by_length" or kwargs.get("group_by_length") is True)
+
+    @unittest.skipUnless(importlib.util.find_spec("trl"), "serve trl: eseguire con .venv/bin/python")
+    def test_the_sft_config_keeps_batch_and_accumulation_from_the_arguments(self):
+        from trl import SFTConfig
+
+        kwargs = train.sft_config_kwargs(train.parse_args(["--batch-size", "1", "--grad-accum", "8"]), SFTConfig)
+        self.assertEqual((kwargs["per_device_train_batch_size"], kwargs["gradient_accumulation_steps"]), (1, 8))
+
+    @unittest.skipUnless(
+        all(importlib.util.find_spec(m) for m in ("torch", "transformers", "datasets")),
+        "servono torch, transformers e datasets: eseguire con .venv/bin/python",
+    )
+    def test_the_trainer_samples_by_length_so_micro_batches_have_almost_no_padding(self):
+        import random
+
+        import torch
+        from datasets import Dataset
+        from transformers import Trainer, TrainingArguments
+        from transformers.trainer_pt_utils import LengthGroupedSampler
+
+        rng = random.Random(0)
+        lengths = [rng.randint(100, 3000) for _ in range(400)]
+        ds = Dataset.from_list([{"input_ids": [1] * n, "attention_mask": [1] * n} for n in lengths])  # stessa forma di tokenized_dataset
+        with tempfile.TemporaryDirectory() as d:
+            args = TrainingArguments(
+                output_dir=d, per_device_train_batch_size=2, gradient_accumulation_steps=4, use_cpu=True, report_to="none",
+                **train.length_grouping_kwargs(TrainingArguments),
+            )
+            sampler = Trainer(model=torch.nn.Linear(1, 1), args=args, train_dataset=ds)._get_train_sampler()
+        self.assertIsInstance(sampler, LengthGroupedSampler)
+        order = list(sampler)
+        self.assertEqual(lengths[order[0]], max(lengths))  # il caso peggiore per primo: un OOM si vedrebbe al passo 1, non a metà corsa
+        padded = used = 0
+        for i in range(0, len(order), 2):  # micro-batch da 2
+            pair = [lengths[j] for j in order[i : i + 2]]
+            padded += 2 * max(pair)
+            used += sum(pair)
+        self.assertLess(1 - used / padded, 0.05)  # con ordine casuale qui sarebbe ~30%
+
+
 class TokenLengthTests(unittest.TestCase):
     @staticmethod
     def tokenizer(text, add_special_tokens=False):

@@ -127,6 +127,52 @@ def first_supported(factory, options: list[dict]) -> dict:
     raise ValueError(f"nessuna variante di argomenti supportata da {factory}: {options}")
 
 
+def length_grouping_kwargs(config_cls) -> dict:
+    """Argomenti con cui `config_cls` (SFTConfig) raggruppa gli esempi per lunghezza invece di mescolarli a caso.
+
+    `packing=False` e ordine casuale riempiono ogni micro-batch fino alla sequenza più lunga che contiene: sul train.jsonl è il 22% del
+    calcolo a 2 x 4 (52% a 8 x 1). Il `LengthGroupedSampler` lo porta a ~0,5%, e mette per primo il caso peggiore (l'esempio più
+    lungo): un OOM si vede al passo 1. Il sampler riceve batch x accumulo, quindi ogni passo di ottimizzazione è fatto di esempi di
+    lunghezza simile. transformers 5 lo chiama `train_sampling_strategy`; il vecchio `group_by_length` non esiste più.
+    Se la config non lo supporta è un errore (`first_supported`): meglio fermarsi che addestrare in silenzio con ordine casuale.
+    """
+    return first_supported(config_cls, [{"train_sampling_strategy": "group_by_length"}, {"group_by_length": True}])
+
+
+def sft_config_kwargs(args, config_cls) -> dict:
+    """Argomenti di `SFTConfig` per questi parametri; `config_cls` serve a scegliere i nomi supportati dalla versione installata."""
+    kwargs = dict(
+        output_dir=str(args.run_dir),
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=args.grad_accum,
+        num_train_epochs=args.epochs,
+        max_steps=args.max_steps,
+        learning_rate=args.lr,
+        warmup_ratio=args.warmup_ratio,
+        lr_scheduler_type="cosine",
+        optim=args.optim,
+        weight_decay=0.01,
+        logging_steps=10,
+        eval_steps=args.eval_steps,
+        save_steps=args.save_steps,
+        save_total_limit=2,
+        bf16=True,
+        seed=args.seed,
+        report_to="none",
+        packing=False,
+        prediction_loss_only=True,  # in valutazione serve solo la loss: niente log-prob per token da accumulare
+    )
+    kwargs.update(first_supported(config_cls, [{"eval_strategy": "steps"}, {"evaluation_strategy": "steps"}]))
+    kwargs.update(first_supported(config_cls, [{"max_length": args.max_seq_length}, {"max_seq_length": args.max_seq_length}]))
+    try:
+        kwargs.update(first_supported(config_cls, [{"dataset_kwargs": {"skip_prepare_dataset": True}}]))
+    except ValueError:
+        pass  # versioni vecchie riconoscono da sole i dataset già tokenizzati
+    kwargs.update(length_grouping_kwargs(config_cls))
+    return kwargs
+
+
 def fits(text: str, tokenizer, max_len: int) -> bool:
     return len(tokenizer(text, add_special_tokens=False)["input_ids"]) <= max_len
 
@@ -216,36 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     train_ds = tokenized_dataset(args.train, tokenizer, args.max_seq_length)
     val_ds = tokenized_dataset(args.val, tokenizer, args.max_seq_length)
 
-    cfg_kwargs = dict(
-        output_dir=str(args.run_dir),
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=1,
-        gradient_accumulation_steps=args.grad_accum,
-        num_train_epochs=args.epochs,
-        max_steps=args.max_steps,
-        learning_rate=args.lr,
-        warmup_ratio=args.warmup_ratio,
-        lr_scheduler_type="cosine",
-        optim=args.optim,
-        weight_decay=0.01,
-        logging_steps=10,
-        eval_steps=args.eval_steps,
-        save_steps=args.save_steps,
-        save_total_limit=2,
-        bf16=True,
-        seed=args.seed,
-        report_to="none",
-        packing=False,
-        prediction_loss_only=True,  # in valutazione serve solo la loss: niente log-prob per token da accumulare
-    )
-    cfg_kwargs.update(first_supported(SFTConfig, [{"eval_strategy": "steps"}, {"evaluation_strategy": "steps"}]))
-    cfg_kwargs.update(first_supported(SFTConfig, [{"max_length": args.max_seq_length}, {"max_seq_length": args.max_seq_length}]))
-    try:
-        cfg_kwargs.update(first_supported(SFTConfig, [{"dataset_kwargs": {"skip_prepare_dataset": True}}]))
-    except ValueError:
-        pass  # versioni vecchie riconoscono da sole i dataset già tokenizzati
     trainer_kwargs = first_supported(SFTTrainer, [{"processing_class": tokenizer}, {"tokenizer": tokenizer}])
-    trainer = SFTTrainer(model=model, train_dataset=train_ds, eval_dataset=val_ds, args=SFTConfig(**cfg_kwargs), **trainer_kwargs)
+    trainer = SFTTrainer(model=model, train_dataset=train_ds, eval_dataset=val_ds, args=SFTConfig(**sft_config_kwargs(args, SFTConfig)), **trainer_kwargs)
 
     # Loss solo sulla risposta dell'assistente (il JSON): marker verificati sul template reale.
     trainer = train_on_responses_only(trainer, instruction_part=common.INSTRUCTION_PART, response_part=common.RESPONSE_PART)
