@@ -150,6 +150,26 @@ def check_layer_count(num_hidden_layers: int, pattern: str) -> None:
         raise RuntimeError(f"il modello ha {num_hidden_layers} layer ma hybrid_override_pattern ne descrive {len(pattern)}: config.json non coerente")
 
 
+def fix_legacy_tied_weights_keys(modules, tie_word_embeddings: bool) -> list[str]:
+    """Porta `_tied_weights_keys` del modeling remoto NVIDIA al formato di transformers 5. Restituisce le classi corrette.
+
+    Il modeling remoto del 4B dichiara `_tied_weights_keys = ["lm_head.weight"]` (una lista, convenzione di transformers 4);
+    transformers 5 si aspetta un dict `{peso legato: sorgente}` e in `save_pretrained`, cioè nell'export di ModelOpt, chiama
+    `.keys()` sulla lista (AttributeError). Il 4B ha `tie_word_embeddings=False`: nessun peso è legato e il valore giusto è `{}`
+    (come nel NemotronH nativo). Se invece fosse legato, la lista non dice a quale sorgente: meglio fermarsi che inventarla.
+    """
+    fixed = []
+    for m in modules:
+        keys = getattr(m, "_tied_weights_keys", None)
+        if keys is None or hasattr(keys, "keys"):
+            continue
+        if keys and tie_word_embeddings:
+            raise RuntimeError(f"{type(m).__name__}._tied_weights_keys è una lista ({list(keys)}) ma gli embedding sono legati: serve il dict {{peso: sorgente}} di transformers 5")
+        m._tied_weights_keys = {}
+        fixed.append(type(m).__name__)
+    return fixed
+
+
 def select_calibration(path: Path, n: int, seed: int) -> list[dict]:
     with Path(path).open("r", encoding="utf-8") as fh:
         examples = [json.loads(line) for line in fh if line.strip()]
@@ -214,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         check_loading_info(info)  # pesi mancanti = inizializzati a caso: la calibrazione "riuscirebbe" su un modello rotto
         check_layer_count(model.config.num_hidden_layers, pattern)
+        fixed = fix_legacy_tied_weights_keys(model.modules(), model.config.tie_word_embeddings)  # senza, l'export fallisce in save_pretrained
+        if fixed:
+            print(f"_tied_weights_keys portato al formato di transformers 5 su: {', '.join(fixed)}", file=sys.stderr)
         if info.get("unexpected_keys"):
             print(f"ATTENZIONE: {len(info['unexpected_keys'])} pesi del checkpoint ignorati dal modello", file=sys.stderr)
         model.eval()  # in training i kernel Mamba fusi leggono out_proj.weight direttamente e il suo quantizzatore resterebbe non calibrato

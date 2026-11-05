@@ -208,6 +208,38 @@ class ConfigMatchesPatternTests(unittest.TestCase):
         self.assertIn("42", str(ctx.exception))
 
 
+class LegacyTiedWeightsKeysTests(unittest.TestCase):
+    """Il modeling remoto NVIDIA dichiara `_tied_weights_keys = ["lm_head.weight"]` (lista, transformers 4); transformers 5 vuole un dict
+    `{target: sorgente}` e in `save_pretrained` (cioè nell'export di ModelOpt) fa `.keys()` sulla lista: AttributeError."""
+
+    def mod(self, **attrs):
+        return type("NemotronHForCausalLM", (), attrs)()
+
+    def test_a_list_becomes_the_empty_dict_when_nothing_is_tied(self):
+        m = self.mod(_tied_weights_keys=["lm_head.weight"])
+        self.assertEqual(quantize.fix_legacy_tied_weights_keys([m], tie_word_embeddings=False), ["NemotronHForCausalLM"])
+        self.assertEqual(m._tied_weights_keys, {})
+
+    def test_dicts_and_modules_without_the_attribute_are_untouched(self):
+        ok = self.mod(_tied_weights_keys={"lm_head.weight": "model.embed.weight"})
+        none = self.mod(_tied_weights_keys=None)
+        plain = self.mod()
+        self.assertEqual(quantize.fix_legacy_tied_weights_keys([ok, none, plain], tie_word_embeddings=True), [])
+        self.assertEqual(ok._tied_weights_keys, {"lm_head.weight": "model.embed.weight"})
+        self.assertIsNone(none._tied_weights_keys)
+        self.assertFalse(hasattr(plain, "_tied_weights_keys"))
+
+    def test_second_call_changes_nothing(self):
+        m = self.mod(_tied_weights_keys=["lm_head.weight"])
+        quantize.fix_legacy_tied_weights_keys([m], tie_word_embeddings=False)
+        self.assertEqual(quantize.fix_legacy_tied_weights_keys([m], tie_word_embeddings=False), [])
+
+    def test_really_tied_embeddings_are_not_guessed(self):
+        # la lista non dice a QUALE peso è legata: con tie_word_embeddings=True un dict inventato esporterebbe pesi sbagliati
+        with self.assertRaises(RuntimeError):
+            quantize.fix_legacy_tied_weights_keys([self.mod(_tied_weights_keys=["lm_head.weight"])], tie_word_embeddings=True)
+
+
 class NoHeavyImportsTests(unittest.TestCase):
     def test_importing_the_module_does_not_load_ml_libraries(self):
         self.assertNotIn("modelopt", sys.modules)
