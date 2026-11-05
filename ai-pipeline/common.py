@@ -175,6 +175,47 @@ def chat_text(tokenizer, messages: list[dict], generation_prompt: bool = False) 
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=generation_prompt, enable_thinking=False)
 
 
+# Tipi di layer del config NATIVO di transformers 5.x -> carattere di `hybrid_override_pattern`. "moe" non c'è: la classe config del
+# codice remoto del 4B (NVIDIA) conosce solo Mamba, attention e MLP.
+_NATIVE_LAYER_CHAR = {"linear_attention": "M", "full_attention": "*", "mlp": "-"}
+
+
+def normalize_nemotron_config(model_dir: Path) -> bool:
+    """Riscrive `config.json` di un NemotronH salvato da transformers 5.x nella forma dei checkpoint NVIDIA. True se l'ha cambiato.
+
+    `save_pretrained_merged` di Unsloth salva il config NATIVO (`layers_block_type`, una lista di nomi; niente
+    `hybrid_override_pattern` né `num_hidden_layers`), ma i pesi con i nomi originali `backbone.*` e, accanto, il codice remoto
+    NVIDIA. La classe config remota ha `layers_block_type` come property senza setter: transformers 5.18 prova a impostarlo come
+    attributo e fallisce (`AttributeError`); e anche senza l'errore userebbe il pattern di default, 52 layer invece dei 42 del 4B.
+    Qui si ricostruiscono `hybrid_override_pattern` e `num_hidden_layers` dalla lista e si toglie la lista. Idempotente; il file
+    non viene toccato se c'è un conflitto (ValueError).
+    """
+    path = Path(model_dir) / "config.json"
+    if not path.is_file():
+        return False
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    if "layers_block_type" not in cfg:
+        return False
+    layers = cfg["layers_block_type"]
+    if not isinstance(layers, list):
+        raise ValueError(f"{path}: layers_block_type dovrebbe essere una lista, non {type(layers).__name__}")
+    unknown = sorted({str(t) for t in layers if t not in _NATIVE_LAYER_CHAR})
+    if unknown:
+        raise ValueError(f"{path}: layers_block_type con tipi di layer che il codice remoto del 4B non sa costruire: {unknown}")
+    pattern = "".join(_NATIVE_LAYER_CHAR[t] for t in layers)
+    if cfg.get("hybrid_override_pattern", pattern) != pattern:
+        raise ValueError(f"{path}: hybrid_override_pattern ({cfg['hybrid_override_pattern']}) e layers_block_type ({pattern}) non coincidono")
+    if cfg.get("num_hidden_layers", len(pattern)) != len(pattern):
+        raise ValueError(f"{path}: num_hidden_layers ({cfg['num_hidden_layers']}) diverso dai {len(pattern)} layer di layers_block_type")
+    del cfg["layers_block_type"]
+    cfg["hybrid_override_pattern"] = pattern
+    cfg["num_hidden_layers"] = len(pattern)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)  # sostituzione atomica: un runtime Colab interrotto non lascia un config a metà
+    return True
+
+
 def copy_remote_code(src: Path, dst: Path) -> list[str]:
     """Copia i file .py del codice remoto del modello (config/modeling) senza sovrascrivere quelli presenti."""
     src, dst = Path(src), Path(dst)

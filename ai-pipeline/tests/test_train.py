@@ -303,6 +303,29 @@ class DoraDeadRowsTests(unittest.TestCase):
         self.assertIs(self.cls.get_weight_norm, first)
 
 
+class MergedConfigTests(unittest.TestCase):
+    FIXTURE = Path(__file__).parent / "fixtures" / "unsloth_merged_nemotron_4b_config.json"
+
+    def test_native_config_written_by_the_merge_is_rewritten(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "config.json").write_text(self.FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            train.normalize_merged_config(Path(d))
+            cfg = json.loads((Path(d) / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["num_hidden_layers"], 42)
+        self.assertNotIn("layers_block_type", cfg)
+
+    def test_a_config_problem_warns_but_never_loses_the_finished_training(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "config.json").write_text(json.dumps({"layers_block_type": ["moe"]}), encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                train.normalize_merged_config(Path(d))  # non deve sollevare
+        self.assertIn("ATTENZIONE", err.getvalue())
+
+
 class DryRunTests(unittest.TestCase):
     def test_summary_without_importing_heavy_libraries(self):
         with tempfile.TemporaryDirectory() as d:

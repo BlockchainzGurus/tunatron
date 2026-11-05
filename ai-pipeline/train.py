@@ -279,8 +279,19 @@ def main(argv: list[str] | None = None) -> int:
     model.save_pretrained(str(args.adapter_dir))
     model.save_pretrained_merged(str(args.out_dir), tokenizer, save_method="merged_16bit")
     copy_remote_code_from_hub(args.model, args.out_dir)
+    normalize_merged_config(args.out_dir)
     print(f"Modello BF16 fuso salvato in {args.out_dir}", file=sys.stderr)
     return 0
+
+
+def normalize_merged_config(out_dir: Path) -> None:
+    """Il merge salva il config nativo di transformers 5 (`layers_block_type`), che il codice remoto copiato accanto non sa leggere
+    (vedi common.normalize_nemotron_config): lo riscrivo nella forma dei checkpoint NVIDIA, la stessa dei pesi `backbone.*`."""
+    try:
+        if common.normalize_nemotron_config(out_dir):
+            print("config.json riscritto nella forma NVIDIA (hybrid_override_pattern al posto di layers_block_type)", file=sys.stderr)
+    except Exception as exc:  # non deve far perdere un addestramento già concluso; quantize.py riprova comunque
+        print(f"ATTENZIONE: config.json non normalizzato ({exc}); quantize.py ci riprova prima di caricare il modello", file=sys.stderr)
 
 
 def copy_remote_code_from_hub(model_id: str, out_dir: Path) -> None:

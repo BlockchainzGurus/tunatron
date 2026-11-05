@@ -173,6 +173,41 @@ class CheckpointVerificationTests(unittest.TestCase):
                 quantize.verify_checkpoint(Path(d))
 
 
+class LoadingInfoTests(unittest.TestCase):
+    """Con pesi `backbone.*` e una classe che si aspetta altri nomi transformers carica lo stesso, re-inizializza a caso e avvisa soltanto:
+    la calibrazione "riuscirebbe" su un modello rotto. Per questo i `missing_keys` fermano la quantizzazione."""
+
+    def test_clean_load_passes(self):
+        quantize.check_loading_info({"missing_keys": set(), "unexpected_keys": set(), "mismatched_keys": set(), "error_msgs": []})
+
+    def test_missing_keys_stop_the_run_and_are_named(self):
+        info = {"missing_keys": {"backbone.layers.0.mixer.in_proj.weight", "lm_head.weight"}, "unexpected_keys": set()}
+        with self.assertRaises(RuntimeError) as ctx:
+            quantize.check_loading_info(info)
+        self.assertIn("lm_head.weight", str(ctx.exception))
+
+    def test_message_lists_a_bounded_number_of_keys(self):
+        info = {"missing_keys": {f"backbone.layers.{i}.x.weight" for i in range(500)}}
+        with self.assertRaises(RuntimeError) as ctx:
+            quantize.check_loading_info(info)
+        self.assertIn("500", str(ctx.exception))
+        self.assertLess(len(str(ctx.exception)), 2000)
+
+    def test_unexpected_keys_alone_do_not_stop_the_run(self):
+        quantize.check_loading_info({"missing_keys": set(), "unexpected_keys": {"extra.weight"}})
+
+
+class ConfigMatchesPatternTests(unittest.TestCase):
+    def test_matching_layer_count_passes(self):
+        quantize.check_layer_count(42, "M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-")
+
+    def test_wrong_layer_count_is_an_error(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            quantize.check_layer_count(52, "M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-")
+        self.assertIn("52", str(ctx.exception))
+        self.assertIn("42", str(ctx.exception))
+
+
 class NoHeavyImportsTests(unittest.TestCase):
     def test_importing_the_module_does_not_load_ml_libraries(self):
         self.assertNotIn("modelopt", sys.modules)

@@ -131,6 +131,25 @@ def dtype_kwarg(transformers_version: str, dtype) -> dict:
     return {"dtype": dtype} if (major, minor) >= (4, 56) else {"torch_dtype": dtype}
 
 
+def check_loading_info(info: dict, show: int = 8) -> None:
+    """Ferma la quantizzazione se transformers ha dovuto inventare dei pesi.
+
+    Se i nomi dei pesi e quelli della classe del modello non coincidono (es. `model.*` contro `backbone.*`) il caricamento riesce lo
+    stesso: i tensori mancanti restano inizializzati a caso, transformers avvisa soltanto, e calibrazione ed export "riuscirebbero"
+    su un modello rotto. Le chiavi in più (`unexpected_keys`) sono pesi ignorati: stesso sintomo, ma qui basta il loro conteggio.
+    """
+    missing = sorted(info.get("missing_keys") or ())
+    if missing:
+        head = ", ".join(missing[:show]) + (", ..." if len(missing) > show else "")
+        raise RuntimeError(f"{len(missing)} pesi del modello non sono nel checkpoint e resterebbero casuali: {head}")
+
+
+def check_layer_count(num_hidden_layers: int, pattern: str) -> None:
+    """Il config caricato deve descrivere tanti layer quanti ne dichiara `hybrid_override_pattern` del config.json."""
+    if num_hidden_layers != len(pattern):
+        raise RuntimeError(f"il modello ha {num_hidden_layers} layer ma hybrid_override_pattern ne descrive {len(pattern)}: config.json non coerente")
+
+
 def select_calibration(path: Path, n: int, seed: int) -> list[dict]:
     with Path(path).open("r", encoding="utf-8") as fh:
         examples = [json.loads(line) for line in fh if line.strip()]
@@ -174,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     from modelopt.torch.export import export_hf_checkpoint
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    # Il merge di Unsloth salva il config nativo di transformers 5 accanto al codice remoto NVIDIA, che non lo sa leggere: va riscritto
+    # PRIMA di qualunque from_pretrained (anche AutoTokenizer legge il config).
+    if common.normalize_nemotron_config(args.model):
+        print(f"{args.model}/config.json riscritto nella forma NVIDIA (hybrid_override_pattern al posto di layers_block_type)", file=sys.stderr)
     tokenizer = AutoTokenizer.from_pretrained(str(args.model), trust_remote_code=True)
     texts = calibration_texts(select_calibration(args.data, args.num_samples, args.seed), tokenizer)
     calib = [tokenizer(t, add_special_tokens=False, truncation=True, max_length=args.max_seq_length)["input_ids"] for t in texts]
@@ -185,9 +208,14 @@ def main(argv: list[str] | None = None) -> int:
         cfg = fp8_quant_cfg(base, pattern) if fmt == "fp8" else nvfp4_quant_cfg(base, args.bf16_embeddings)
         print(f"== {fmt}: {len(cfg['quant_cfg'])} regole ModelOpt -> {out}", file=sys.stderr)
 
-        model = AutoModelForCausalLM.from_pretrained(
-            str(args.model), device_map="cuda", trust_remote_code=True, **dtype_kwarg(transformers.__version__, torch.bfloat16)
+        model, info = AutoModelForCausalLM.from_pretrained(
+            str(args.model), device_map="cuda", trust_remote_code=True, output_loading_info=True,
+            **dtype_kwarg(transformers.__version__, torch.bfloat16),
         )
+        check_loading_info(info)  # pesi mancanti = inizializzati a caso: la calibrazione "riuscirebbe" su un modello rotto
+        check_layer_count(model.config.num_hidden_layers, pattern)
+        if info.get("unexpected_keys"):
+            print(f"ATTENZIONE: {len(info['unexpected_keys'])} pesi del checkpoint ignorati dal modello", file=sys.stderr)
         model.eval()  # in training i kernel Mamba fusi leggono out_proj.weight direttamente e il suo quantizzatore resterebbe non calibrato
 
         def forward_loop(m):

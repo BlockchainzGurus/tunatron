@@ -4,6 +4,7 @@ I golden in shared/golden.json sono gli stessi usati dai test Rust di sast-engin
 se questi test passano in entrambi i linguaggi, training e inferenza vedono lo stesso prompt.
 """
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -192,6 +193,98 @@ class FindingValidationTests(unittest.TestCase):
     def test_inconsistent_vex_status_is_reported(self):
         errors = common.validate_finding(dict(self.VALID, vex_status="not_affected"))
         self.assertTrue(any("vex_status" in e for e in errors), errors)
+
+
+class NormalizeNemotronConfigTests(unittest.TestCase):
+    """`save_pretrained_merged` di Unsloth scrive il config NATIVO di transformers 5.x (`layers_block_type`, senza
+    `hybrid_override_pattern` né `num_hidden_layers`) accanto ai pesi `backbone.*` e al codice remoto NVIDIA, la cui classe
+    config ha `layers_block_type` read-only e, senza pattern, costruisce 52 layer invece dei 42 del 4B.
+    Il fixture è un config reale: generato da NemotronHConfig di transformers 5.18.0 dal config del 4B."""
+
+    FIXTURE = Path(__file__).parent / "fixtures" / "unsloth_merged_nemotron_4b_config.json"
+    PATTERN_4B = "M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-"
+
+    def model_dir(self, config=None):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        cfg = json.loads(self.FIXTURE.read_text(encoding="utf-8")) if config is None else config
+        (Path(d.name) / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        return Path(d.name)
+
+    def read(self, d):
+        return json.loads((Path(d) / "config.json").read_text(encoding="utf-8"))
+
+    def test_fixture_is_the_broken_native_shape(self):
+        cfg = json.loads(self.FIXTURE.read_text(encoding="utf-8"))
+        self.assertIn("layers_block_type", cfg)
+        self.assertNotIn("hybrid_override_pattern", cfg)
+        self.assertNotIn("num_hidden_layers", cfg)
+
+    def test_native_config_becomes_the_nvidia_shape(self):
+        d = self.model_dir()
+        self.assertTrue(common.normalize_nemotron_config(d))
+        cfg = self.read(d)
+        self.assertEqual(cfg["hybrid_override_pattern"], self.PATTERN_4B)
+        self.assertEqual(cfg["num_hidden_layers"], 42)
+        self.assertNotIn("layers_block_type", cfg)  # la property read-only della classe remota fa fallire il caricamento
+
+    def test_everything_else_is_left_alone(self):
+        before = json.loads(self.FIXTURE.read_text(encoding="utf-8"))
+        d = self.model_dir()
+        common.normalize_nemotron_config(d)
+        after = self.read(d)
+        for key, value in before.items():
+            if key != "layers_block_type":
+                self.assertEqual(after[key], value, key)
+        self.assertEqual(set(after) - set(before), {"hybrid_override_pattern", "num_hidden_layers"})
+
+    def test_second_call_changes_nothing(self):
+        d = self.model_dir()
+        common.normalize_nemotron_config(d)
+        written = (d / "config.json").read_text(encoding="utf-8")
+        self.assertFalse(common.normalize_nemotron_config(d))
+        self.assertEqual((d / "config.json").read_text(encoding="utf-8"), written)
+
+    def test_nvidia_shape_is_not_touched(self):
+        cfg = {"model_type": "nemotron_h", "hybrid_override_pattern": "M-*-", "num_hidden_layers": 4}
+        d = self.model_dir(cfg)
+        before = (d / "config.json").read_text(encoding="utf-8")
+        self.assertFalse(common.normalize_nemotron_config(d))
+        self.assertEqual((d / "config.json").read_text(encoding="utf-8"), before)
+
+    def test_both_shapes_present_and_consistent_just_drops_the_list(self):
+        cfg = {"hybrid_override_pattern": "M-*-", "num_hidden_layers": 4,
+               "layers_block_type": ["linear_attention", "mlp", "full_attention", "mlp"]}
+        d = self.model_dir(cfg)
+        self.assertTrue(common.normalize_nemotron_config(d))
+        self.assertEqual(self.read(d), {"hybrid_override_pattern": "M-*-", "num_hidden_layers": 4})
+
+    def test_conflicting_pattern_is_an_error_and_the_file_is_untouched(self):
+        cfg = {"hybrid_override_pattern": "M-M-", "layers_block_type": ["linear_attention", "mlp", "full_attention", "mlp"]}
+        d = self.model_dir(cfg)
+        before = (d / "config.json").read_text(encoding="utf-8")
+        with self.assertRaises(ValueError):
+            common.normalize_nemotron_config(d)
+        self.assertEqual((d / "config.json").read_text(encoding="utf-8"), before)
+
+    def test_wrong_num_hidden_layers_is_an_error(self):
+        cfg = {"num_hidden_layers": 52, "layers_block_type": ["linear_attention", "mlp"]}
+        with self.assertRaises(ValueError):
+            common.normalize_nemotron_config(self.model_dir(cfg))
+
+    def test_layer_types_the_4b_remote_code_cannot_build_are_an_error(self):
+        # "moe" è dei Nemotron-3 grandi: la classe remota del 4B conosce solo M, * e -
+        with self.assertRaises(ValueError):
+            common.normalize_nemotron_config(self.model_dir({"layers_block_type": ["linear_attention", "moe"]}))
+
+    def test_a_directory_without_config_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(common.normalize_nemotron_config(Path(d)))
+
+    def test_a_config_with_no_layer_description_is_a_noop(self):
+        d = self.model_dir({"model_type": "llama"})
+        self.assertFalse(common.normalize_nemotron_config(d))
+        self.assertEqual(self.read(d), {"model_type": "llama"})
 
 
 if __name__ == "__main__":
