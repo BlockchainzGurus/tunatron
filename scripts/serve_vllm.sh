@@ -29,4 +29,6 @@ mapfile -t ARGS < <(python3 ai-pipeline/vllm_flags.py "$MODEL_DIR" --port "$PORT
 [[ -z "${VLLM_QUANT_FLAG:-}" ]] || ARGS+=(--quantization "$VLLM_QUANT_FLAG")
 ARGS+=("$@")
 echo "+ $VLLM ${ARGS[*]}" >&2
+# Il venv non è attivato: senza la sua bin/ nel PATH FlashInfer non trova ninja per compilare i kernel al volo (FileNotFoundError: 'ninja').
+if [[ "$VLLM" == */* ]]; then VLLM_BIN_DIR="$(cd "$(dirname "$VLLM")" && pwd)"; export PATH="$VLLM_BIN_DIR:$PATH"; fi
 exec "$VLLM" "${ARGS[@]}"

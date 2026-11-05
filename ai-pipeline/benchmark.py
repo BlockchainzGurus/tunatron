@@ -317,11 +317,40 @@ def vllm_command(vllm_bin: str, model_dir: Path, port: int = 8000, gpu_util: flo
     return [vllm_bin, *vllm_flags.serve_args(model_dir, port=port, gpu_util=gpu_util, max_len=max_len)]
 
 
-def wait_ready(url: str, proc: subprocess.Popen, timeout: float) -> None:
+def vllm_env(vllm_bin: str, base: dict | None = None) -> dict:
+    """Ambiente di vLLM: la cartella del suo eseguibile va in testa al PATH.
+
+    `venv/bin/vllm` si lancia senza attivare il venv, quindi `venv/bin` non è nel PATH. vLLM però compila al volo i kernel di
+    FlashInfer (sampler) chiamando `ninja` per nome: senza questo, `FileNotFoundError: 'ninja'` e il motore muore all'avvio.
+    Il percorso diventa assoluto perché FlashInfer lancia ninja da un'altra cartella di lavoro.
+    """
+    env = dict(os.environ if base is None else base)
+    if os.sep in vllm_bin:  # un nome nudo ("vllm") lo risolve già il PATH
+        bin_dir = os.path.dirname(os.path.abspath(vllm_bin))
+        env["PATH"] = os.pathsep.join(p for p in (bin_dir, env.get("PATH", "")) if p)  # niente voci vuote: significano "cartella corrente"
+    return env
+
+
+def start_vllm(vllm_bin: str, model_dir: Path, port: int, gpu_util: float, log) -> subprocess.Popen:
+    return subprocess.Popen(vllm_command(vllm_bin, model_dir, port, gpu_util), stdout=log, stderr=subprocess.STDOUT,
+                            env=vllm_env(vllm_bin), start_new_session=True)
+
+
+def log_tail(path: Path, lines: int = 40) -> str:
+    try:
+        return "".join(Path(path).read_text(errors="replace").splitlines(keepends=True)[-lines:]).rstrip("\n")
+    except OSError:
+        return ""
+
+
+def wait_ready(url: str, proc: subprocess.Popen, timeout: float, log_path: Path | None = None) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(f"vLLM terminato con codice {proc.returncode} prima di essere pronto (vedi il log)")
+            msg = f"vLLM terminato con codice {proc.returncode} prima di essere pronto (log: {log_path})" if log_path else \
+                  f"vLLM terminato con codice {proc.returncode} prima di essere pronto"
+            tail = log_tail(log_path) if log_path else ""
+            raise RuntimeError(f"{msg}\n--- ultime righe del log ---\n{tail}" if tail else msg)
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=3) as resp:
                 if resp.status == 200:
@@ -400,9 +429,9 @@ def cmd_hardware(args: argparse.Namespace) -> int:
         model_dir = Path(path)
         print(f"== {name}: {model_dir}", file=sys.stderr)
         with PeakSampler() as sampler, (args.out_dir / f"vllm_{name}.log").open("w") as log:
-            proc = subprocess.Popen(vllm_command(args.vllm_bin, model_dir, args.port, args.gpu_util), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            proc = start_vllm(args.vllm_bin, model_dir, args.port, args.gpu_util, log)
             try:
-                wait_ready(url, proc, args.startup_timeout)
+                wait_ready(url, proc, args.startup_timeout, log_path=args.out_dir / f"vllm_{name}.log")
                 started = time.perf_counter()
                 raw = run_llm(url, "sast-nemotron", [slice_messages(ex) for ex in examples], args.concurrency)
                 wall = time.perf_counter() - started

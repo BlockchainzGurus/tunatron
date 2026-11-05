@@ -1,5 +1,7 @@
 """Test delle parti pure di benchmark.py + client HTTP verso un finto server vLLM (stdlib)."""
 import json
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -293,6 +295,76 @@ class VllmCommandTests(unittest.TestCase):
         self.assertEqual(cmd[:2], ["vllm", "serve"])
         self.assertIn("8123", cmd)
         self.assertIn("0.70", cmd)
+
+
+class VllmEnvTests(unittest.TestCase):
+    """vLLM parte dal suo eseguibile senza attivare il venv: i tool dello stesso venv (ninja per FlashInfer) devono stare nel PATH."""
+
+    def test_venv_bin_dir_goes_first_and_the_rest_is_kept(self):
+        base = {"PATH": "/usr/bin:/bin", "HOME": "/root"}
+        env = benchmark.vllm_env("/content/venv-vllm/bin/vllm", base)
+        self.assertEqual(env["PATH"], "/content/venv-vllm/bin:/usr/bin:/bin")
+        self.assertEqual(env["HOME"], "/root")
+        self.assertEqual(base["PATH"], "/usr/bin:/bin")  # l'ambiente di partenza non si modifica
+
+    def test_relative_path_becomes_absolute(self):
+        # FlashInfer lancia ninja con un'altra cartella di lavoro: un PATH relativo non troverebbe nulla
+        env = benchmark.vllm_env(".venv-vllm/bin/vllm", {"PATH": "/usr/bin"})
+        first = env["PATH"].split(":")[0]
+        self.assertTrue(Path(first).is_absolute())
+        self.assertEqual(Path(first), Path(".venv-vllm/bin").absolute())
+
+    def test_bare_name_is_resolved_by_the_path_already(self):
+        env = benchmark.vllm_env("vllm", {"PATH": "/usr/bin"})
+        self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_no_empty_path_entry_when_path_is_missing(self):
+        # una voce vuota nel PATH significa "cartella corrente"
+        env = benchmark.vllm_env("/opt/v/bin/vllm", {})
+        self.assertEqual(env["PATH"], "/opt/v/bin")
+
+    def test_defaults_to_the_process_environment(self):
+        self.assertTrue(benchmark.vllm_env("/opt/v/bin/vllm")["PATH"].startswith("/opt/v/bin:"))
+
+    def test_wait_ready_error_carries_the_log_tail(self):
+        with tempfile.TemporaryDirectory() as d:
+            log_path = Path(d) / "vllm.log"
+            log_path.write_text("".join(f"riga {i}\n" for i in range(100)) + "FileNotFoundError: 'ninja'\n", encoding="utf-8")
+            proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(3)"])
+            proc.wait()
+            with self.assertRaises(RuntimeError) as ctx:
+                benchmark.wait_ready("http://127.0.0.1:9", proc, 5, log_path=log_path)
+        message = str(ctx.exception)
+        self.assertIn("codice 3", message)
+        self.assertIn("FileNotFoundError: 'ninja'", message)
+        self.assertIn("riga 99", message)
+        self.assertNotIn("riga 10\n", message)  # solo la coda, non tutto il log
+        self.assertIn(str(log_path), message)
+
+    def test_wait_ready_without_a_log_keeps_working(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(1)"])
+        proc.wait()
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark.wait_ready("http://127.0.0.1:9", proc, 5)
+        self.assertIn("codice 1", str(ctx.exception))
+
+    def test_started_process_finds_the_tools_next_to_vllm(self):
+        with tempfile.TemporaryDirectory() as d:
+            bin_dir = Path(d) / "venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            fake_vllm = bin_dir / "vllm"
+            fake_vllm.write_text("#!/bin/sh\ncommand -v ninja\n", encoding="utf-8")
+            fake_vllm.chmod(0o755)
+            fake_ninja = bin_dir / "ninja"
+            fake_ninja.write_text("#!/bin/sh\n", encoding="utf-8")
+            fake_ninja.chmod(0o755)
+            model = Path(d) / "model"
+            model.mkdir()
+            log_path = Path(d) / "vllm.log"
+            with log_path.open("w") as log:
+                proc = benchmark.start_vllm(str(fake_vllm), model, 8000, 0.8, log)
+                proc.wait(timeout=30)
+            self.assertEqual(log_path.read_text().strip(), str(fake_ninja))
 
 
 if __name__ == "__main__":
