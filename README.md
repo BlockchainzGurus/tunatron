@@ -50,6 +50,7 @@ Tunatron/
 │   ├── prepare_data.py
 │   ├── train.py
 │   ├── quantize.py
+│   ├── model_card.py  # MODEL_CARD.md con grafici (in inglese) da log di training e risultati del benchmark
 │   └── benchmark.py
 ├── sast-engine/       # Motore SAST ad alte prestazioni in Rust (Axum, Tree-sitter, Petgraph)
 │   ├── src/           # Ingestor, Graph Slicer, RAG CWE, VLLM client, CycloneDX/VEX, Notarizer
@@ -94,7 +95,7 @@ cd ..
 ```
 
 > **Esecuzione alternativa su cloud GPU:**
-> Se non si dispone di 16 GB di VRAM in locale, eseguire `notebooks/train_colab.ipynb` su Google Colab (es. istanza con RTX PRO 6000 o A100): [aprilo in Colab](https://colab.research.google.com/github/BlockchainzGurus/tunatron/blob/master/notebooks/train_colab.ipynb). Il notebook clona questa repo da GitHub (impostazioni `REPO_URL`/`REPO_REF`), quindi addestra il codice già pubblicato con `git push`; i risultati (`model_bf16/`, `adapter/`, log) finiscono in `Il mio Drive/Tunatron/`. La sezione 10 del notebook esegue anche `quantize.py` (ModelOpt) e salva lì `model_fp8/` e `model_nvfp4/`.
+> Se non si dispone di 16 GB di VRAM in locale, eseguire `notebooks/train_colab.ipynb` su Google Colab (es. istanza con RTX PRO 6000 o A100): [aprilo in Colab](https://colab.research.google.com/github/BlockchainzGurus/tunatron/blob/master/notebooks/train_colab.ipynb). Il notebook clona questa repo da GitHub (impostazioni `REPO_URL`/`REPO_REF`), quindi addestra il codice già pubblicato con `git push`; i risultati (`model_bf16/`, `adapter/`, log) finiscono in `Il mio Drive/Tunatron/`. La sezione 10 del notebook esegue anche `quantize.py` (ModelOpt) e salva lì `model_fp8/` e `model_nvfp4/`. La sezione 11 esegue il benchmark vLLM (sempre l'ultima versione, in un ambiente a parte) e salva in `Il mio Drive/Tunatron/` il file `MODEL_CARD.md` con i grafici (`model_card_assets/`) e i risultati grezzi (`benchmark_results/`).
 
 ### 3. Quantizzazione con NVIDIA ModelOpt (FP8 & NVFP4)
 

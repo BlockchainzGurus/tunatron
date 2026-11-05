@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import signal
@@ -46,6 +47,7 @@ _FENCE = re.compile(r"```[A-Za-z+]*\n(.*?)\n```", re.S)
 _CASE = re.compile(r"case_(\d+)\.")
 _WEIGHTS = re.compile(r"Model loading took ([\d.]+) GiB")
 _KV_TOKENS = re.compile(r"GPU KV cache size: ([\d,]+) tokens")
+_VLLM_VERSION = (re.compile(r"vLLM API server version (\S+)"), re.compile(r"\(v(\S+?)\) with config"))
 
 
 # --------------------------------------------------------------------------- metriche
@@ -206,6 +208,14 @@ def parse_vllm_log(text: str) -> dict:
     return {"weights_gib": float(weights.group(1)) if weights else None, "kv_tokens": int(kv.group(1).replace(",", "")) if kv else None}
 
 
+def parse_vllm_version(text: str) -> str | None:
+    """Versione di vLLM dal log di avvio (riga dell'API server, o quella dell'engine); None se non c'è."""
+    for rx in _VLLM_VERSION:
+        if m := rx.search(text):
+            return m.group(1)
+    return None
+
+
 def vram_used_mib() -> int:
     out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True)
     return parse_nvidia_smi_memory(out.stdout)
@@ -263,6 +273,43 @@ def accuracy_table(results: dict[str, dict]) -> str:
             n = sum(m["counts"].values())
             lines.append(f"| {name} | {label} | {n} | {m['precision']:.3f} | {m['recall']:.3f} | {m['f1']:.3f} | {m['fpr']:.3f} | {rep['invalid']} |")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- riga del benchmark hardware
+def percentile(values: list[float], q: float) -> float:
+    """Percentile q (0-100) col metodo del rango più vicino; 0.0 se la lista è vuota."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q / 100 * len(ordered)) - 1)]
+
+
+def hardware_row(name: str, examples: list[dict], raw: list[dict], wall: float, log_info: dict, vllm_version: str | None,
+                 vram_delta_mib: int, disk_gb: float, scan_s: float | None, concurrency: int) -> dict:
+    """Riga di hardware.json per un formato. I campi `report`, `latency_p50_s/p95_s`, `n`, `concurrency` e `vllm_version`
+    sono aggiunti per la model card; gli altri sono quelli della tabella Markdown."""
+    ok = [r for r in raw if r["content"] is not None]
+    latencies = [r["latency"] for r in ok]
+    report = evaluate(examples, [verdict_from_content(r["content"]) for r in raw])
+    return {
+        "format": name,
+        "weights_gb": log_info["weights_gib"],
+        "kv_tokens": log_info["kv_tokens"],
+        "vram_gb": vram_delta_mib / 1024,
+        "disk_gb": disk_gb,
+        "tok_s": sum(r["completion_tokens"] for r in ok) / wall if wall else 0.0,
+        "latency_s": statistics.mean(latencies) if latencies else 0.0,
+        "latency_p50_s": percentile(latencies, 50),
+        "latency_p95_s": percentile(latencies, 95),
+        "scan_s": scan_s,
+        "f1": report["all"]["f1"],
+        "f1_call_sinks": report["call_sinks"]["f1"],
+        "invalid": report["invalid"],
+        "n": len(examples),
+        "concurrency": concurrency,
+        "vllm_version": vllm_version,
+        "report": report,
+    }
 
 
 # --------------------------------------------------------------------------- gestione vLLM
@@ -362,22 +409,9 @@ def cmd_hardware(args: argparse.Namespace) -> int:
                 scan = statistics.mean(scan_repos(args.engine_url, repos)) if repos else None
             finally:
                 stop_vllm(proc)
-        log_info = parse_vllm_log((args.out_dir / f"vllm_{name}.log").read_text(errors="replace"))
-        ok = [r for r in raw if r["content"] is not None]
-        report = evaluate(examples, [verdict_from_content(r["content"]) for r in raw])
-        rows.append({
-            "format": name,
-            "weights_gb": log_info["weights_gib"],
-            "kv_tokens": log_info["kv_tokens"],
-            "vram_gb": sampler.delta_mib / 1024,
-            "disk_gb": dir_size_gb(model_dir),
-            "tok_s": sum(r["completion_tokens"] for r in ok) / wall if wall else 0.0,
-            "latency_s": statistics.mean(r["latency"] for r in ok) if ok else 0.0,
-            "scan_s": scan,
-            "f1": report["all"]["f1"],
-            "f1_call_sinks": report["call_sinks"]["f1"],
-            "invalid": report["invalid"],
-        })
+        log_text = (args.out_dir / f"vllm_{name}.log").read_text(errors="replace")
+        rows.append(hardware_row(name, examples, raw, wall, parse_vllm_log(log_text), parse_vllm_version(log_text),
+                                 sampler.delta_mib, dir_size_gb(model_dir), scan, args.concurrency))
         deadline = time.time() + 120  # attende che la VRAM venga rilasciata prima del modello successivo
         while time.time() < deadline and vram_used_mib() > sampler.baseline_mib + 500:
             time.sleep(2)

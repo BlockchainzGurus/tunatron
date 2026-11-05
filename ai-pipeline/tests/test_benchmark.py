@@ -173,6 +173,49 @@ class TableTests(unittest.TestCase):
         self.assertIn("| nvfp4 | n/d | 210000 | 11.3 | 2.8 | 90.5 | 1.10 | n/d | 0.770 | -0.030 |", lines[3])
 
 
+class PercentileTests(unittest.TestCase):
+    def test_nearest_rank(self):
+        values = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]  # non ordinati di proposito
+        self.assertEqual(benchmark.percentile(values, 50), 5)
+        self.assertEqual(benchmark.percentile(values, 95), 10)
+        self.assertEqual(benchmark.percentile([7], 95), 7)
+        self.assertEqual(benchmark.percentile([], 50), 0.0)
+
+
+class VllmVersionTests(unittest.TestCase):
+    def test_version_is_read_from_the_api_server_line_or_the_engine_line(self):
+        self.assertEqual(benchmark.parse_vllm_version("INFO 11-04 [api_server.py:1] vLLM API server version 0.11.0"), "0.11.0")
+        self.assertEqual(benchmark.parse_vllm_version("Initializing a V1 LLM engine (v0.11.2) with config"), "0.11.2")
+        self.assertIsNone(benchmark.parse_vllm_version("nothing"))
+
+
+class HardwareRowTests(unittest.TestCase):
+    def test_row_keeps_the_old_fields_and_adds_the_new_ones(self):
+        examples = [{"meta": {"label": label, "sink_kind": "call"}} for label in (1, 1, 0, 0)]
+        raw = [
+            {"content": '{"vulnerable": true}', "completion_tokens": 100, "latency": 1.0},
+            {"content": '{"vulnerable": false}', "completion_tokens": 100, "latency": 2.0},
+            {"content": '{"vulnerable": false}', "completion_tokens": 100, "latency": 3.0},
+            {"content": None, "completion_tokens": 0, "latency": 0.5, "error": "timeout"},
+        ]
+        row = benchmark.hardware_row("bf16", examples, raw, wall=2.0, log_info={"weights_gib": 7.5, "kv_tokens": 1000}, vllm_version="0.11.0",
+                                     vram_delta_mib=2048, disk_gb=7.9, scan_s=None, concurrency=8)
+        self.assertEqual(row["format"], "bf16")
+        self.assertEqual(row["tok_s"], 150.0)  # 300 token in 2 s
+        self.assertEqual(row["latency_s"], 2.0)
+        self.assertEqual(row["latency_p50_s"], 2.0)
+        self.assertEqual(row["latency_p95_s"], 3.0)
+        self.assertEqual(row["vram_gb"], 2.0)
+        self.assertEqual(row["weights_gb"], 7.5)
+        self.assertEqual(row["kv_tokens"], 1000)
+        self.assertEqual(row["disk_gb"], 7.9)
+        self.assertEqual((row["n"], row["concurrency"], row["vllm_version"]), (4, 8, "0.11.0"))
+        self.assertEqual(row["report"]["n"], 4)
+        self.assertEqual(row["f1"], row["report"]["all"]["f1"])
+        self.assertEqual(row["invalid"], 1)
+        self.assertIn("| bf16 |", benchmark.markdown_table([row]))
+
+
 class MockVllm:
     """Server HTTP minimo compatibile con /v1/chat/completions, per testare il client senza GPU."""
 
