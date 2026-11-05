@@ -336,11 +336,43 @@ def start_vllm(vllm_bin: str, model_dir: Path, port: int, gpu_util: float, log) 
                             env=vllm_env(vllm_bin), start_new_session=True)
 
 
-def log_tail(path: Path, lines: int = 40) -> str:
+# Riga di log del motore di vLLM: "(EngineCore pid=47909) ERROR 11-05 12:11:38 [core.py:1584] <testo>"
+_ENGINE_ERROR_PREFIX = re.compile(r"^\(EngineCore pid=\d+\) ERROR \d\d-\d\d \d\d:\d\d:\d\d \[[\w.]+:\d+\] ")
+_CARET_ONLY = re.compile(r"^[\s^~]*$")
+
+
+def engine_error(text: str, lines: int = 8) -> str:
+    """Le ultime righe del traceback con cui il motore di vLLM spiega perché non parte ("" se il log non ne ha uno).
+
+    L'errore vero sta nel blocco che segue "EngineCore failed to start."; in fondo al log c'è poi il traceback dell'API server, lungo,
+    che dice solo "See root cause above": la sola coda del file non mostra la causa. Prefisso e righe di soli cursori sono tolti.
+    """
+    rows = text.splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1) if "EngineCore failed to start" in rows[i]), None)
+    if start is None:
+        return ""
+    block = []
+    for row in rows[start + 1:]:
+        m = _ENGINE_ERROR_PREFIX.match(row)
+        if not m:
+            break
+        body = row[m.end():]
+        if not _CARET_ONLY.match(body):
+            block.append(body)
+    return "\n".join(block[-lines:])
+
+
+def log_excerpt(path: Path, lines: int = 40) -> str:
+    """Cosa mostrare di un log di vLLM quando il processo muore: l'errore del motore, se c'è, altrimenti la coda del file."""
     try:
-        return "".join(Path(path).read_text(errors="replace").splitlines(keepends=True)[-lines:]).rstrip("\n")
+        text = Path(path).read_text(errors="replace")
     except OSError:
         return ""
+    engine = engine_error(text)
+    if engine:
+        return f"--- errore del motore vLLM ---\n{engine}"
+    tail = "\n".join(text.splitlines()[-lines:])
+    return f"--- ultime righe del log ---\n{tail}" if tail else ""
 
 
 def wait_ready(url: str, proc: subprocess.Popen, timeout: float, log_path: Path | None = None) -> None:
@@ -349,8 +381,8 @@ def wait_ready(url: str, proc: subprocess.Popen, timeout: float, log_path: Path 
         if proc.poll() is not None:
             msg = f"vLLM terminato con codice {proc.returncode} prima di essere pronto (log: {log_path})" if log_path else \
                   f"vLLM terminato con codice {proc.returncode} prima di essere pronto"
-            tail = log_tail(log_path) if log_path else ""
-            raise RuntimeError(f"{msg}\n--- ultime righe del log ---\n{tail}" if tail else msg)
+            excerpt = log_excerpt(log_path) if log_path else ""
+            raise RuntimeError(f"{msg}\n{excerpt}" if excerpt else msg)
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=3) as resp:
                 if resp.status == 200:

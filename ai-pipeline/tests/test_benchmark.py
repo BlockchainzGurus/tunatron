@@ -341,6 +341,50 @@ class VllmEnvTests(unittest.TestCase):
         self.assertNotIn("riga 10\n", message)  # solo la coda, non tutto il log
         self.assertIn(str(log_path), message)
 
+    def test_wait_ready_shows_the_engine_error_even_when_it_is_far_above_the_tail(self):
+        # formato reale di vLLM 0.33: il blocco d'errore del motore, poi la sua copia senza prefisso e, in fondo, il traceback
+        # dell'API server (lungo) che dice solo "See root cause above"
+        p = "(EngineCore pid=47909) ERROR 11-05 12:11:38 [core.py:1584] "
+        engine = [
+            p + "EngineCore failed to start.",
+            p + "Traceback (most recent call last):",
+            p + '  File "/v/vllm/v1/engine/core.py", line 1555, in run_engine_core',
+            p + "    engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)",
+            p + "                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+            p + '  File "/v/vllm/model_executor/layers/vocab_parallel_embedding.py", line 519, in weight_loader',
+            p + "    param[: loaded_weight.shape[0]].data.copy_(loaded_weight)",
+            p + "RuntimeError: The size of tensor a (3136) must match the size of tensor b (1568) at non-singleton dimension 1",
+        ]
+        wrapper = ["(APIServer pid=47800) INFO 11-05 12:11:39 [utils.py:628] [shutdown] Process manager: send sigterm to process EngineCore",
+                   "Traceback (most recent call last):"]
+        wrapper += [f'  File "/v/vllm/entrypoints/frame{i}.py", line {i}, in wrapper' for i in range(60)]
+        wrapper.append("RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}")
+        with tempfile.TemporaryDirectory() as d:
+            log_path = Path(d) / "vllm.log"
+            log_path.write_text("\n".join(["(APIServer pid=47800) INFO starting"] + engine + ["Process EngineCore:"] + wrapper) + "\n",
+                                encoding="utf-8")
+            proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(1)"])
+            proc.wait()
+            with self.assertRaises(RuntimeError) as ctx:
+                benchmark.wait_ready("http://127.0.0.1:9", proc, 5, log_path=log_path)
+        message = str(ctx.exception)
+        self.assertIn("RuntimeError: The size of tensor a (3136) must match the size of tensor b (1568)", message)
+        self.assertIn("vocab_parallel_embedding.py", message)
+        self.assertNotIn("(EngineCore pid=", message)  # prefisso tolto
+        self.assertNotIn("^^^^", message)              # le righe dei cursori non servono
+        self.assertNotIn("frame30.py", message)        # il traceback dell'API server non fa rumore
+        self.assertIn(str(log_path), message)
+
+    def test_engine_error_handles_logs_without_that_block(self):
+        self.assertEqual(benchmark.engine_error("INFO tutto bene\nWARNING qualcosa\n"), "")
+        self.assertEqual(benchmark.engine_error(""), "")
+
+    def test_engine_error_takes_the_last_failure_and_stops_at_the_block_end(self):
+        p = "(EngineCore pid=1) ERROR 11-05 12:00:00 [core.py:1] "
+        text = "\n".join([p + "EngineCore failed to start.", p + "ValueError: vecchio",
+                          p + "EngineCore failed to start.", p + "KeyError: 'nuovo'", "Process EngineCore:", "IndietroNo: fuori dal blocco"])
+        self.assertEqual(benchmark.engine_error(text), "KeyError: 'nuovo'")
+
     def test_wait_ready_without_a_log_keeps_working(self):
         proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(1)"])
         proc.wait()
