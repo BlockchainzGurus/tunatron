@@ -172,7 +172,8 @@ La quantizzazione è affidata a **NVIDIA Model Optimizer (ModelOpt)**, garantend
   ```bash
   ../.venv-quant/bin/python quantize.py --only nvfp4 --bf16-embeddings --bf16-lm-head
   ```
-  Senza il flag `quantize.py` produce la ricetta NVIDIA invariata. Il legame fra la `lm_head` e il testo senza senso è la spiegazione che regge dai sorgenti di vLLM, non ancora confermata da una nuova misura dell'NVFP4: aggiornare questa nota con l'esito.
+  Senza il flag `quantize.py` produce la ricetta NVIDIA invariata. Confermato dalla misura: con la `lm_head` in BF16 l'NVFP4 risponde normalmente (F1 0,689, latenza media 1,37 s, 3,4 GB di pesi e 3,6 GB su disco, contro 0,667 del BF16 e 0,694 dell'FP8 nella stessa corsa su 200 esempi).
+- **Pubblicazione su Hugging Face:** il modello base è sotto la *NVIDIA Nemotron Open Model License*, che chiede di dare ai destinatari una copia della licenza: in ogni repo va caricato il file `LICENSE` del modello base (`nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16`) accanto al `README.md` (la model card, con `license_name` e `license_link` nell'intestazione). Un repo per formato: `model_bf16`, `model_fp8`, `model_nvfp4`.
 - **KV Cache FP8:** Abilitabile facoltativamente in fase di serving con `scripts/serve_vllm.sh model_fp8 --kv-cache-dtype fp8`.
 - **Budget VRAM in Training:** Su schede da 16 GB, la configurazione predefinita impiega batch size 1 e gradient accumulation 8 (batch effettivo 8), mantenendo l'allocazione entro ~13-14 GB. Per contesti con limiti più stringenti è possibile limitare la lunghezza del contesto tramite `--max-seq-length 4096`.
 
@@ -234,9 +235,11 @@ Il modulo `prepare_data.py` genera esempi di addestramento strutturati nel forma
 |---|---|---|---|
 | **PrimeVul** | MIT | CVE reali in C/C++, coppie vulnerabile/corretta. | Sink di chiamata o livello di funzione. |
 | **SecVulEval** | MIT | C/C++, ~10k coppie con commit di fix. | Localizzazione tramite diff del commit. |
-| **CVEfixes + PyVul** | CC-BY-4.0 | Repository Python storici con `code_before` e `code_after`. | Derivato dalle modifiche apportate dalla fix. |
-| **Juliet C/C++ 1.3** | CC0 | Casi sintetici mirati (SARD), impiegati esclusivamente in train/validation con etichetta esplicita `/* FLAW */`. | Annotazione esplicita nel sorgente. |
+| **CVEfixes + PyVul** | CVEfixes: dati CC-BY-4.0, codice MIT. **PyVul: nessuna licenza dichiarata** (nel repo non c'è un file LICENSE; la CC BY-NC-ND vista su arXiv è del paper, non dei dati) | Repository Python storici con `code_before` e `code_after`. | Derivato dalle modifiche apportate dalla fix. |
+| **Juliet C/C++ 1.3** | Non coperto da copyright negli USA; CC0 1.0 dove NIST ha diritti all'estero | Casi sintetici mirati (SARD), impiegati esclusivamente in train/validation con etichetta esplicita `/* FLAW */`. | Annotazione esplicita nel sorgente. |
 | **CodeQL Security Suite**| MIT | Test suite manuali in Python e C/C++ con tag `# $ Alert`. | Annotazione di riga. |
+
+Licenze verificate alla fonte il 2026-11-06 (le dichiarano i metadati o i repository dei dataset); sono riprese, con i riferimenti da citare, nella sezione *License and attributions* della model card (`DATA_LICENSES` in `ai-pipeline/model_card.py`). Il codice dei dataset viene da progetti open source e ogni frammento resta sotto la licenza del progetto d'origine.
 
 ### Pulizia e Bilanciamento
 

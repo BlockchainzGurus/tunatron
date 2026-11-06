@@ -201,7 +201,8 @@ def section(text: str, title: str) -> str:
 
 
 class RenderCardTests(unittest.TestCase):
-    TITLES = ["Summary", "Intended use and limitations", "Training", "Data", "Evaluation", "Efficiency", "Files and reproduction"]
+    TITLES = ["Summary", "Intended use and limitations", "Training", "Data", "Evaluation", "Efficiency", "Files and reproduction",
+              "License and attributions"]
 
     def test_front_matter_and_sections_in_order(self):
         text = model_card.render_card(full_ctx())
@@ -210,6 +211,42 @@ class RenderCardTests(unittest.TestCase):
             self.assertIn(line, text)
         positions = [text.index(f"\n## {t}\n") for t in self.TITLES]
         self.assertEqual(positions, sorted(positions))
+
+    def test_front_matter_names_the_base_model_license_so_the_hub_shows_no_warning(self):
+        text = model_card.render_card(full_ctx())
+        front = text.split("\n---\n", 1)[0]
+        self.assertIn("license: other", front)
+        self.assertIn("license_name: nvidia-nemotron-open-model-license", front)
+        self.assertIn("license_link: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-nemotron-open-model-license/", front)
+
+    def test_license_section_cites_the_base_license_and_every_data_source_with_its_paper(self):
+        text = section(model_card.render_card(empty_ctx()), "License and attributions")  # statica: c'e' anche senza dati
+        self.assertIn("NVIDIA Nemotron Open Model License", text)
+        self.assertIn("https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-nemotron-open-model-license/", text)
+        self.assertIn("Licensed by NVIDIA Corporation under the NVIDIA Nemotron Model License.", text)
+        for name, paper in (("PrimeVul", "2403.18624"), ("SecVulEval", "2505.19828"), ("CVEfixes", "PROMISE"), ("PyVul", "2509.04260"),
+                            ("Juliet", "SARD"), ("CodeQL", "github/codeql")):
+            self.assertIn(name, text)
+            self.assertIn(paper, text, f"riferimento di {name}")
+        self.assertIn("remains under the license of its original project", text)
+
+    def test_pyvul_is_reported_as_having_no_stated_license_and_the_paper_license_is_not_taken_for_the_data(self):
+        text = section(model_card.render_card(empty_ctx()), "License and attributions")
+        row = next(line for line in text.splitlines() if line.startswith("| PyVul"))
+        self.assertIn("No license stated", row)
+        self.assertNotIn("NC-ND", row, "la CC BY-NC-ND e' del paper, non dei dati")
+
+    def test_every_source_in_the_shipped_dataset_has_a_license_row(self):
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        files = [data_dir / f"{name}.jsonl" for name in ("train", "val", "test")]
+        if not all(f.exists() for f in files):
+            self.skipTest("dataset non presente")
+        used = set()
+        for f in files:
+            with f.open(encoding="utf-8") as fh:
+                used |= {json.loads(line)["meta"].get("source", "?") for line in fh if line.strip()}
+        covered = {source for row in model_card.DATA_LICENSES for source in row["sources"]}
+        self.assertEqual(used - covered, set(), "fonti dati senza licenza dichiarata nella scheda")
 
     def test_tables_have_one_row_per_format_and_the_load_caveat(self):
         text = model_card.render_card(full_ctx())

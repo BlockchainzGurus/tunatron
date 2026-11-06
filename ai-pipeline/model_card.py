@@ -218,9 +218,38 @@ def _image(ctx: dict, name: str, alt: str) -> list[str]:
     return ["", f"![{alt}]({ctx['charts'][name]})"] if name in ctx["charts"] else []
 
 
+# Licenza del modello base (NVIDIA Nemotron 3 Nano 4B): stessi valori di license_name/license_link della sua pagina Hugging Face. Con `license: other`
+# l'Hub li vuole, altrimenti mostra un avviso sui metadati.
+LICENSE_NAME = "nvidia-nemotron-open-model-license"
+LICENSE_LINK = "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-nemotron-open-model-license/"
+NOTICE = "Licensed by NVIDIA Corporation under the NVIDIA Nemotron Model License."  # frase che la licenza chiede nel file NOTICE, se il modello ne ha uno
+
+# Fonti dei dati con la licenza che DICHIARANO e il riferimento da citare (verificati alla fonte il 2026-11-06). `sources` sono i valori di meta.source
+# nei .jsonl: un test controlla che ogni fonte usata abbia una riga. PyVul non dichiara alcuna licenza (la CC BY-NC-ND vista su arXiv e' del paper).
+DATA_LICENSES = (
+    {"name": "PrimeVul", "sources": ("primevul",), "license": "MIT",
+     "reference": "Ding et al., \"Vulnerability Detection with Code Language Models: How Far Are We?\", arXiv:2403.18624 (2024); "
+                  "repository `DLVulDet/PrimeVul`, mirror `colin/PrimeVul`"},
+    {"name": "SecVulEval", "sources": ("secvuleval",), "license": "MIT (declared in the dataset metadata)",
+     "reference": "Ahmed et al., \"SecVulEval: Benchmarking LLMs for Real-World C/C++ Vulnerability Detection\", arXiv:2505.19828 (2025); "
+                  "dataset `arag0rn/SecVulEval`"},
+    {"name": "CVEfixes", "sources": ("cvefixes-python",), "license": "Data: CC BY 4.0; code: MIT",
+     "reference": "Bhandari, Naseer and Moonen, \"CVEfixes: Automated Collection of Vulnerabilities and Their Fixes from Open-Source Software\", "
+                  "PROMISE '21 (ACM); used through the merged dataset `janhvi-ag/cvefixes_pyvul_merged`, which states no license of its own"},
+    {"name": "PyVul", "sources": ("pyvul",), "license": "No license stated by its authors (the repository has no LICENSE file)",
+     "reference": "Quan, Wang, Li, Zhuo, Chen and Du, \"An Empirical Study of Vulnerabilities in Python Packages and Their Detection\", "
+                  "arXiv:2509.04260 (2025); repository `billquan/PyVul`, used through the same merged dataset"},
+    {"name": "Juliet C/C++ 1.3", "sources": ("juliet",),
+     "license": "Not subject to copyright in the United States; CC0 1.0 where NIST holds rights abroad",
+     "reference": "NSA Center for Assured Software, distributed by NIST SARD (https://samate.nist.gov/SARD/test-suites/112)"},
+    {"name": "CodeQL security tests", "sources": ("codeql-tests",), "license": "MIT (GitHub, Inc.)", "reference": "Test files of `github/codeql`"},
+)
+
+
 def _front_matter(ctx: dict) -> list[str]:
     return ["---", "language:", "- it", "- en", f"base_model: {ctx['base_model']}", "library_name: transformers", "pipeline_tag: text-generation",
-            "license: other", "tags:", "- security", "- sast", "- vulnerability-detection", "- dora", "---"]
+            "license: other", f"license_name: {LICENSE_NAME}", f"license_link: {LICENSE_LINK}",
+            "tags:", "- security", "- sast", "- vulnerability-detection", "- dora", "---"]
 
 
 def _summary(ctx: dict) -> list[str]:
@@ -236,7 +265,7 @@ def _intended_use() -> list[str]:
             "- It expects the prompt format of this project (CWE rule, candidate sink, numbered backward slice); other prompt styles are not evaluated.",
             "- Trained and evaluated on C, C++ and Python functions from public vulnerability datasets; results may not transfer to other languages "
             "or to proprietary code.",
-            "- License: see the base model card."]
+            "- License and data terms: see the License and attributions section."]
 
 
 def _training(ctx: dict) -> list[str]:
@@ -351,10 +380,25 @@ def _files(ctx: dict) -> list[str]:
     return lines
 
 
+def _license() -> list[str]:
+    """Licenza del modello base e licenze/riferimenti dei dati. Testo fisso: non dipende dagli input, quindi c'e' sempre."""
+    rows = [[d["name"], d["license"], d["reference"]] for d in DATA_LICENSES]
+    return [f"This model is a Derivative Model of NVIDIA Nemotron 3 Nano 4B and is distributed under the [NVIDIA Nemotron Open Model License]({LICENSE_LINK}); "
+            "a copy of the license is in the `LICENSE` file of this repository.",
+            "",
+            NOTICE,
+            "",
+            "The training, validation and test data come from the public sources below. The license column is what each source states. The code in these "
+            "datasets was collected from open-source projects, and each snippet remains under the license of its original project. Check these terms "
+            "before you reuse the model or the data in a way that depends on them.",
+            ""] + _table(["Source", "License stated by the source", "Reference"], rows)
+
+
 def render_card(ctx: dict) -> str:
-    """MODEL_CARD.md: front matter YAML e sette sezioni; un input mancante dà "not available: ..." senza errori."""
+    """MODEL_CARD.md: front matter YAML e otto sezioni; un input mancante dà "not available: ..." senza errori."""
     sections = (("Summary", _summary(ctx)), ("Intended use and limitations", _intended_use()), ("Training", _training(ctx)), ("Data", _data(ctx)),
-                ("Evaluation", _evaluation(ctx)), ("Efficiency", _efficiency(ctx)), ("Files and reproduction", _files(ctx)))
+                ("Evaluation", _evaluation(ctx)), ("Efficiency", _efficiency(ctx)), ("Files and reproduction", _files(ctx)),
+                ("License and attributions", _license()))
     parts = _front_matter(ctx) + ["", "# Tunatron SAST triage model", ""]
     for title, body in sections:
         parts += [f"## {title}", "", *body, ""]
