@@ -78,23 +78,27 @@ def leaky_identifier(name: str, extra_parts: frozenset[str] = frozenset()) -> bo
     return any(p.lower() in parts for p in _PART_RE.findall(name))
 
 
-def _digest(seed: str, name: str) -> str:
-    return hashlib.sha256(f"{seed}:{name}".encode("utf-8")).hexdigest()
+def _digest(seed: str, key: str) -> str:
+    return hashlib.sha256(f"{seed}:{key}".encode("utf-8")).hexdigest()
 
 
-def _assign(names, seed: str, prefix: str, width: int, suffix: str, taken: set[str]) -> dict[str, str]:
-    """Nome neutro `prefix<width esadecimali di sha256(seed:nome)>suffix` per ciascun nome.
+def _assign(items: list[tuple[str, str]], seed: str, prefix: str, width: int, suffix: str,
+            taken: set[str]) -> dict[str, str]:
+    """Nome neutro `prefix<width esadecimali di sha256(seed:chiave)>suffix` per ogni coppia (nome, chiave).
 
-    I nomi si visitano in ordine, così il risultato dipende solo dall'insieme; se un nome nuovo è già preso (collisione
-    dei primi esadecimali o identificatore già presente) o contiene esso stesso una parola-spia (`bad` è fatto di cifre
-    esadecimali: `src/d99bbad2.c`) si rifà l'hash con `seed:nome:k`, k = 1, 2, …
+    Le coppie si visitano nell'ordine dato (che il chiamante sceglie senza etichette); un nome già visto tiene il primo
+    nome nuovo. Se il nome nuovo è già preso (collisione dei primi esadecimali o identificatore già presente) o contiene
+    esso stesso una parola-spia (`bad` è fatto di cifre esadecimali: `src/d99bbad2.c`) si rifà l'hash con
+    `seed:chiave:j`, j = 1, 2, …
     """
     out: dict[str, str] = {}
-    for name in sorted(names):
-        key, k = name, 0
-        while (new := f"{prefix}{_digest(seed, key)[:width]}{suffix}") in taken or LEAK_RE.search(new):
-            k += 1
-            key = f"{name}:{k}"
+    for name, key in items:
+        if name in out:
+            continue
+        attempt, j = key, 0
+        while (new := f"{prefix}{_digest(seed, attempt)[:width]}{suffix}") in taken or LEAK_RE.search(new):
+            j += 1
+            attempt = f"{key}:{j}"
         taken.add(new)
         out[name] = new
     return out
@@ -103,12 +107,22 @@ def _assign(names, seed: str, prefix: str, width: int, suffix: str, taken: set[s
 def anonymize_slice(rec: dict, seed: str, macros: dict[str, str]) -> dict:
     """Copia anonimizzata di un record di `sast-engine slice` (`rec` non viene modificato).
 
-    Commenti tolti; macro riscritte col nome vero (`SYSTEM` → `system`, anche nel callee del sink); funzioni definite
-    nei blocchi → `fn_<6 hex>`; altri identificatori con una parola-spia (per parti o, in C, anche per sottostringa di
-    `LEAK_RE`, per esempio `prefix`) → `v_<6 hex>`; stringhe e caratteri che soddisfano `LEAK_RE` → `"text"`/`'t'`;
-    file → `src/<8 hex>.c`. Le righe sono quelle del codice ripulito: `end_line = start_line + righe − 1` e `sink.line`
-    segue la mappa di `strip_comments` nel blocco a profondità 0. `ValueError` se manca quel blocco o se la riga del
-    sink non è più nel codice ripulito.
+    La ridenominazione è canonica (alpha-renaming), così due sink gemelli (`…_54e_badSink` e `…_54e_goodG2BSink`, stesso
+    corpo, righe diverse dello stesso file) danno lo stesso record:
+
+    - commenti tolti; macro riscritte col nome vero (`SYSTEM` → `system`, anche nel callee del sink);
+    - funzione definita nel blocco di profondità `d` e rango `k` fra i blocchi di quella profondità (nell'ordine di
+      `rec["blocks"]`) → `fn_<6 hex di sha256(seed:fn:d:k)>`, anche nelle chiamate;
+    - l'n-esimo identificatore distinto con una parola-spia (per parti o, in C, anche per sottostringa di `LEAK_RE`, per
+      esempio `prefix`), in ordine di prima comparsa nei blocchi e poi nel callee del sink → `v_<6 hex di sha256(seed:v:n)>`;
+    - stringhe e caratteri che soddisfano `LEAK_RE` → `"text"`/`'t'`; file → `src/<8 hex di sha256(seed:percorso)>.c`;
+    - righe sintetiche: `start_line = 1 + int(sha256(seed:line:d:k)[:4], 16) % 900`, `end_line = start_line + righe − 1`
+      e `sink.line` = `start_line` del blocco a profondità 0 + riga del sink nel codice ripulito (mappa di
+      `strip_comments`); `sink.file` = file del blocco a profondità 0.
+
+    Il risultato dipende solo dal testo senza commenti, da `seed` e da `macros`. I nomi ripetuti fra test case diversi
+    (`v_…`, file) dipendono comunque dal seme: chi costruisce i dati passa un seme per test case (`f"{seed}:{gruppo}"`).
+    `ValueError` se manca il blocco a profondità 0 o se la riga del sink non è più nel codice ripulito.
     """
     out = copy.deepcopy(rec)
     blocks = out["blocks"]
@@ -122,16 +136,30 @@ def anonymize_slice(rec: dict, seed: str, macros: dict[str, str]) -> dict:
     for b in blocks:
         b["code"], line_map = strip_comments(b["code"])
         line_maps.append(line_map)
+    old = sink["line"] - sink_block["start_line"]
+    if old not in line_maps[at_sink]:
+        raise ValueError(f"la riga del sink ({sink['line']}) non è nel codice ripulito del blocco a profondità 0")
+    sink_row = line_maps[at_sink].index(old)
 
-    # Identificatori del record dopo le macro (codice e callee del sink): da qui i nomi da cambiare e quelli già presi.
+    # Rango (profondità, k) di ogni blocco: k conta i blocchi precedenti con la stessa profondità.
+    seen_depths: dict[int, int] = {}
+    ranks = []
+    for b in blocks:
+        k = seen_depths.get(b["depth"], 0)
+        seen_depths[b["depth"]] = k + 1
+        ranks.append((b["depth"], k))
+
+    # Identificatori del record dopo le macro, in ordine di prima comparsa (codice dei blocchi, poi callee del sink).
     texts = [b["code"] for b in blocks] + [sink["function"]]
-    idents = {macros.get(m.group(0), m.group(0)) for t in texts for m in _TOKEN_RE.finditer(t) if m.lastgroup == "ident"}
+    idents = list(dict.fromkeys(
+        macros.get(m.group(0), m.group(0)) for t in texts for m in _TOKEN_RE.finditer(t) if m.lastgroup == "ident"))
     defined = {b["name"] for b in blocks}
-    leaky = {n for n in idents - defined if leaky_identifier(n) or LEAK_RE.search(n)}
-    taken = idents - defined - leaky
-    names = _assign(defined, seed, "fn_", 6, "", taken)
-    names |= _assign(leaky, seed, "v_", 6, "", taken)
-    files = _assign({b["file"] for b in blocks}, seed, "src/", 8, ".c", set())
+    leaky = [n for n in idents if n not in defined and (leaky_identifier(n) or LEAK_RE.search(n))]
+    taken = set(idents) - defined - set(leaky)
+    by_rank = sorted(range(len(blocks)), key=lambda i: ranks[i])
+    names = _assign([(blocks[i]["name"], "fn:{}:{}".format(*ranks[i])) for i in by_rank], seed, "fn_", 6, "", taken)
+    names |= _assign([(n, f"v:{i}") for i, n in enumerate(leaky)], seed, "v_", 6, "", taken)
+    files = _assign([(b["file"], b["file"]) for b in blocks], seed, "src/", 8, ".c", set())
 
     def rewrite(m: re.Match) -> str:
         tok = m.group(0)
@@ -142,17 +170,14 @@ def anonymize_slice(rec: dict, seed: str, macros: dict[str, str]) -> dict:
             return _NEUTRAL_LITERAL[m.lastgroup]
         return tok
 
-    for b in blocks:
+    for b, (depth, k) in zip(blocks, ranks):
         b["code"] = _TOKEN_RE.sub(rewrite, b["code"])
         b["name"] = names[b["name"]]
         b["file"] = files[b["file"]]
+        b["start_line"] = 1 + int(_digest(seed, f"line:{depth}:{k}")[:4], 16) % 900
         b["end_line"] = b["start_line"] + len(b["code"].split("\n")) - 1
 
-    old = sink["line"] - sink_block["start_line"]
-    line_map = line_maps[at_sink]
-    if old not in line_map:
-        raise ValueError(f"la riga del sink ({sink['line']}) non è nel codice ripulito del blocco a profondità 0")
-    sink["line"] = sink_block["start_line"] + line_map.index(old)
+    sink["line"] = sink_block["start_line"] + sink_row
     sink["file"] = sink_block["file"]
     sink["function"] = _TOKEN_RE.sub(rewrite, sink["function"])
     return out

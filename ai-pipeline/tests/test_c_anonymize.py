@@ -142,7 +142,7 @@ class AnonymizeSliceTests(unittest.TestCase):
         out = anonymize_slice(BAD, "s", MACROS)
         self.assertNotIn("SYSTEM", json.dumps(out))
         self.assertIn("system(data)", sink_code_line(out))
-        self.assertEqual(out["sink"]["line"], 46 + 2, "il commento tolto sposta il sink di una riga in su")
+        self.assertEqual(out["sink"]["line"] - out["blocks"][1]["start_line"], 2, "il commento tolto sposta il sink in su")
         for b in out["blocks"]:
             self.assertEqual(b["end_line"], b["start_line"] + len(b["code"].split("\n")) - 1)
 
@@ -222,7 +222,7 @@ class AnonymizeSliceTests(unittest.TestCase):
         out = anonymize_slice(block(code, start_line=20), "s", MACROS)
         self.assertNotIn("\r", out["blocks"][0]["code"])
         self.assertEqual(sink_code_line(out), "    system(d);")
-        self.assertEqual(out["sink"]["line"], 22)
+        self.assertEqual(out["sink"]["line"] - out["blocks"][0]["start_line"], 2)
 
     def test_block_empty_after_stripping_is_kept_as_one_empty_line(self):
         rec = copy.deepcopy(BAD)
@@ -238,28 +238,82 @@ class AnonymizeSliceTests(unittest.TestCase):
             anonymize_slice(rec, "s", MACROS)
 
     def test_hash_collisions_are_disambiguated(self):
-        """Con il seme `s`, `f4277` e `f6856` hanno gli stessi 6 esadecimali di sha256: i nomi nuovi devono restare distinti."""
-        self.assertEqual(c_anonymize._digest("s", "f4277")[:6], c_anonymize._digest("s", "f6856")[:6])
-        code = "void f4277(char *d)\n{\n    f6856(d);\n    system(d);\n}"
-        rec = block(code, name="f4277")
-        rec["blocks"].insert(0, {"file": "b.c", "name": "f6856", "start_line": 1, "end_line": 1, "depth": 1, "lang": "c",
-                                 "code": "void f6856(char *d) { f4277(d); }"})
-        out = anonymize_slice(rec, "s", MACROS)
-        names = [b["name"] for b in out["blocks"]]
-        self.assertEqual(len(set(names)), 2, names)
-        self.assertIn(f"{names[0]}(d);", out["blocks"][1]["code"])
-        self.assertIn(f"{names[1]}(d);", out["blocks"][0]["code"])
+        """Un identificatore già presente con lo stesso nome canonico costringe a rifare l'hash."""
+        clash = "fn_" + c_anonymize._digest("s", "fn:0:0")[:6]
+        out = anonymize_slice(block(f"void f(char *d)\n{{\n    {clash}(d);\n    system(d);\n}}"), "s", MACROS)
+        name = out["blocks"][0]["name"]
+        self.assertRegex(name, r"^fn_[0-9a-f]{6}$")
+        self.assertNotEqual(name, clash)
+        self.assertIn(f"{clash}(d);", out["blocks"][0]["code"], "l'identificatore esterno resta com'è")
 
     def test_new_names_never_spell_a_leak_word_in_hex(self):
-        """`bad` è fatto di cifre esadecimali: con il seme `s`, `f1272` dà `4bad0f…` e `d510.c` dà `4bad48b6…`."""
-        self.assertIn("bad", c_anonymize._digest("s", "f1272")[:6])
-        self.assertIn("bad", c_anonymize._digest("s", "d510.c")[:8])
-        rec = block("void f1272(char *d)\n{\n    system(d);\n}", name="f1272")
-        rec["blocks"][0]["file"] = rec["sink"]["file"] = "d510.c"
-        out = anonymize_slice(rec, "s", MACROS)
+        """`bad` è fatto di cifre esadecimali: con il seme `s1736`, `fn:0:0` dà `38badf…` e `d462.c` dà `bad90f45…`."""
+        self.assertIn("bad", c_anonymize._digest("s1736", "fn:0:0")[:6])
+        self.assertIn("bad", c_anonymize._digest("s1736", "d462.c")[:8])
+        rec = block("void f(char *d)\n{\n    system(d);\n}")
+        rec["blocks"][0]["file"] = rec["sink"]["file"] = "d462.c"
+        out = anonymize_slice(rec, "s1736", MACROS)
         self.assertRegex(out["blocks"][0]["name"], r"^fn_[0-9a-f]{6}$")
         self.assertRegex(out["blocks"][0]["file"], r"^src/[0-9a-f]{8}\.c$")
         self.assertIsNone(LEAK_RE.search(json.dumps(out)), json.dumps(out))
+
+
+def twin(name: str, start_line: int, file: str = "s02/x_54e.c") -> dict:
+    """Record a un blocco con il corpo dei sink gemelli di Juliet (12 righe, `SYSTEM(data)` alla quarta)."""
+    code = f"""void {name}(char * data)
+{{
+    /* POTENTIAL FLAW: Execute command in data possibly leading to command injection */
+    if (SYSTEM(data) != 0)
+    {{
+        printLine("command execution failed!");
+        exit(1);
+    }}
+    // fine
+    data = NULL;
+    return;
+}}"""
+    return {"sink": {"function": "system", "file": file, "line": start_line + 3, "cwe_id": "CWE-78"},
+            "blocks": [{"file": file, "name": name, "start_line": start_line, "end_line": start_line + 11, "depth": 0,
+                        "lang": "c", "code": code}],
+            "truncated": False}
+
+
+class CanonicalRenamingTests(unittest.TestCase):
+    """Regole R8/R9: l'uscita non dipende da nomi originali, posizioni nel file o nomi di variabile rivelatori."""
+
+    def test_twin_sinks_with_different_names_and_positions_become_identical(self):
+        bad = anonymize_slice(twin(f"{P}e_badSink", 20), "s", MACROS)
+        good = anonymize_slice(twin(f"{P}e_goodG2BSink", 40), "s", MACROS)
+        self.assertEqual(bad["blocks"], good["blocks"])
+        self.assertEqual(bad["sink"], good["sink"])
+        self.assertIn("system(data)", sink_code_line(bad))
+
+    def test_original_line_position_is_not_encoded(self):
+        self.assertEqual(anonymize_slice(twin("f", 5), "s", MACROS), anonymize_slice(twin("f", 500), "s", MACROS))
+
+    def test_synthetic_start_line_follows_the_formula(self):
+        out = anonymize_slice(BAD, "s", MACROS)
+        for b, rank in zip(out["blocks"], ("1:0", "0:0")):
+            self.assertEqual(b["start_line"], 1 + int(c_anonymize._digest("s", f"line:{rank}")[:4], 16) % 900)
+
+    def test_leaky_variable_names_do_not_change_output(self):
+        body = "void f(char * data)\n{{\n    char {0}[50];\n    data = {0};\n    system(data);\n}}"
+        bad = anonymize_slice(block(body.format("dataBadBuffer")), "s", MACROS)
+        good = anonymize_slice(block(body.format("dataGoodBuffer")), "s", MACROS)
+        self.assertEqual(bad, good)
+        self.assertIn("data = v_" + c_anonymize._digest("s", "v:0")[:6] + ";", bad["blocks"][0]["code"])
+
+    def test_block_function_names_depend_on_position_not_original_name(self):
+        def rec(outer: str, inner: str) -> dict:
+            r = block(f"void {inner}(char *d)\n{{\n    system(d);\n}}", name=inner)
+            r["blocks"].insert(0, {"file": "a.c", "name": outer, "start_line": 1, "end_line": 1, "depth": 1, "lang": "c",
+                                   "code": f"void {outer}(char *d) {{ {inner}(d); }}"})
+            return r
+
+        self.assertEqual(anonymize_slice(rec("alpha", "beta"), "s", MACROS), anonymize_slice(rec("beta", "alpha"), "s", MACROS))
+        out = anonymize_slice(rec("alpha", "beta"), "s", MACROS)
+        self.assertEqual(out["blocks"][1]["name"], "fn_" + c_anonymize._digest("s", "fn:0:0")[:6])
+        self.assertEqual(out["blocks"][0]["name"], "fn_" + c_anonymize._digest("s", "fn:1:0")[:6])
 
 
 if __name__ == "__main__":
