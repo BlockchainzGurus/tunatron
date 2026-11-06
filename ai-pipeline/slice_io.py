@@ -62,5 +62,6 @@ def run_slice(
             targets_file.unlink(missing_ok=True)
     if out.returncode != 0:
         raise RuntimeError(f"sast-engine slice è uscito con codice {out.returncode}: {out.stderr.strip()}")
-    records = [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+    # Solo "\n": `splitlines()` spezzerebbe un record anche su U+2028/U+2029/U+0085, che serde_json lascia grezzi nel codice.
+    records = [json.loads(line) for line in out.stdout.split("\n") if line.strip()]
     return records, out.stderr

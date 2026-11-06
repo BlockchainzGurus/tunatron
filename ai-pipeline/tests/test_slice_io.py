@@ -49,6 +49,17 @@ class RunSliceTests(unittest.TestCase):
         self.assertTrue(stderr.startswith(f"slice {self.dir} "), "il sottocomando e la radice vengono prima delle opzioni")
         self.assertNotIn("--targets", stderr, "senza target il motore usa i sink della KB")
 
+    def test_records_are_split_on_newline_only(self):
+        """serde_json non escapa U+2028/U+2029/U+0085 nel sorgente grezzo: `str.splitlines()` spezzerebbe il record."""
+        code = "// riga con\u0085separatori unicode"
+        raw = dict(RECORD_A, blocks=[{"code": code}])
+        (self.dir / "stdout.jsonl").write_text(json.dumps(raw, ensure_ascii=False) + "\n" + json.dumps(RECORD_B) + "\n", encoding="utf-8")
+        engine = fake_engine(self.dir, 'cat "$(dirname "$0")/stdout.jsonl"\n')
+        records, _ = slice_io.run_slice(self.dir, binary=engine)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["blocks"][0]["code"], code)
+        self.assertEqual(records[1], RECORD_B)
+
     def test_custom_limits_are_passed(self):
         engine = fake_engine(self.dir, OK_BODY)
         _, stderr = slice_io.run_slice(self.dir, depth=2, callers=1, max_chars=500, binary=engine)
