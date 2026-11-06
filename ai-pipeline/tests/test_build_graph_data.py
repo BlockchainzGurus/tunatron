@@ -14,6 +14,7 @@ Test case del finto archivio:
 import contextlib
 import io
 import json
+import random
 import re
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from unittest import mock
 import build_graph_data
 import c_anonymize
 import common
+import graph_examples
 import juliet_graph
 import leak_audit
 import localize
@@ -400,7 +402,8 @@ class JulietTrackTests(unittest.TestCase):
         self.assertEqual(report["pairs"], 1)
         for key in ("bow_accuracy", "structure_accuracy", "structure_table", "top_tokens", "sink_only_share",
                     "per_cwe", "per_cwe_kind_split", "held_out_variants", "val_pct", "test_pct",
-                    "dispatcher_blocks_dropped", "main_blocks_dropped", "candidates"):
+                    "dispatcher_blocks_dropped", "main_blocks_dropped", "candidates", "multi_block_share",
+                    "train_twin_sets", "holdout_strata", "unseen_variants_blocks"):
             self.assertIn(key, report)
 
     def test_all_conflict_testcase_produces_no_examples(self):
@@ -447,9 +450,12 @@ class JulietTrackTests(unittest.TestCase):
             self.assertEqual((meta["source"], meta["synthetic"], meta["track"]), ("juliet-nist", False, "juliet"))
 
     def test_held_out_variants_appear_only_in_unseen_variants(self):
-        report = self.build(holdout_pct=50, test_pct=50, val_pct=0)
+        report = self.build(holdout_pct=12, test_pct=50, val_pct=0, holdout_min_examples=1)
         held = set(report["held_out_variants"])
-        self.assertEqual(len(held), 1)
+        # Uno strato per forma: `_52` ha chiamanti, `_01` è a un blocco; ciascuno dà almeno una variante (R17).
+        self.assertEqual(report["holdout_strata"], {"caller": ["52"], "single": ["01"], "ineligible": []})
+        self.assertEqual(held, {"01", "52"})
+        self.assertEqual(report["unseen_variants_blocks"], {"single": 2, "multi": 2})
         out = self.outputs()
         self.assertTrue(out["unseen"])
         self.assertTrue(all(ex["meta"]["variant"] in held for ex in out["unseen"]))
@@ -470,6 +476,125 @@ class JulietTrackTests(unittest.TestCase):
         roots = (self.engine.parent / "roots.log").read_text(encoding="utf-8").split()
         self.assertEqual(roots, ["CWE78_OS_Command_Injection"])
         self.assertEqual(report["roots_without_targets"], ["CWE190_Integer_Overflow"])
+
+
+def _pool_block(name: str, depth: int, code: str, file: str) -> dict:
+    return {"file": file, "name": name, "start_line": 10 * (depth + 1), "end_line": 10 * (depth + 1) + code.count("\n"),
+            "depth": depth, "lang": "c", "code": code}
+
+
+def _pool_example(group: str, variant: str, label: int, kind: str, caller: str | None, sink: str,
+                  cwe: str = "CWE-78") -> dict:
+    """Esempio vero (`build_example`) con un chiamante opzionale; il file dipende dal gruppo come dopo l'anonimizzazione."""
+    file = f"src/{graph_examples._sha(group)[:8]}.c"
+    sink_code = f"void fn_a0a0a0(char * data)\n{{\n    {sink}\n    system(data);\n}}"
+    blocks = [_pool_block("fn_a0a0a0", 0, sink_code, file)]
+    if caller is not None:
+        blocks.insert(0, _pool_block("fn_b1b1b1", 1, f"void fn_b1b1b1(void)\n{{\n    {caller}\n    fn_a0a0a0(data);\n}}", file))
+    rec = {"sink": {"function": "system", "file": file, "line": 13, "cwe_id": cwe}, "blocks": blocks, "truncated": False}
+    meta = {"source": "juliet-nist", "synthetic": False, "track": graph_examples.JULIET_TRACK, "group": group,
+            "variant": variant}
+    return graph_examples.build_example(rec, KB, label=label, variant_kind=kind, origin=None, meta=meta)
+
+
+def synthetic_pool() -> list[dict]:
+    """Gruppi a catena (gemelli bad/g2b con lo stesso sink, a volte anche un b2g) e molti esempi a un blocco sbilanciati."""
+    pool = []
+    for i in range(60):
+        group, variant = f"CWE78_x_{i}_5{i % 4}", f"5{i % 4}"
+        pool.append(_pool_example(group, variant, 1, "bad", f"data = getenv(\"A{i}\");", f"use({i});"))
+        pool.append(_pool_example(group, variant, 0, "g2b", f"data = \"ls{i}\";", f"use({i});"))
+        if i % 3 == 0:
+            pool.append(_pool_example(group, variant, 0, "b2g", f"data = getenv(\"A{i}\");", f"check({i});"))
+    for i in range(400):
+        label = int(i % 8 < 3)  # 150 vulnerabili, 250 sicuri
+        pool.append(_pool_example(f"CWE78_y_{i}_0{i % 5}", f"0{i % 5}", label, "bad" if label else "g2b", None,
+                                  f"single({i});"))
+    return pool
+
+
+def blocks_of(ex: dict) -> int:
+    return len(ex["meta"]["trace"]["blocks"])
+
+
+class CapTrainTests(unittest.TestCase):
+    """R16: campione di train ricco di chiamanti e contrastivo (gruppi interi di gemelli)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pool = synthetic_pool()
+
+    def test_twins_of_a_selected_group_stay_together(self):
+        out = build_graph_data.cap_train(self.pool, 100, 0.5, seed=3)
+        chosen = {graph_examples.prompt_key(ex) for ex in out}
+        groups = {ex["meta"]["group"] for ex in out if blocks_of(ex) >= 2}
+        self.assertTrue(groups)
+        for ex in self.pool:
+            if ex["meta"]["group"] in groups and ex["meta"]["variant_kind"] in ("bad", "g2b"):
+                self.assertIn(graph_examples.prompt_key(ex), chosen, ex["meta"]["group"])
+
+    def test_multi_block_share_follows_the_option_and_labels_stay_balanced(self):
+        for share in (0.3, 0.5, 0.7):
+            out = build_graph_data.cap_train(self.pool, 100, share, seed=3)
+            self.assertEqual(len(out), 100)
+            multi = sum(blocks_of(ex) >= 2 for ex in out) / len(out)
+            self.assertLessEqual(abs(multi - share), 0.05, (share, multi))
+            labels = Counter(ex["meta"]["label"] for ex in out)
+            self.assertLessEqual(abs(labels[0] - labels[1]), 1, labels)
+
+    def test_cap_train_is_deterministic_and_order_independent(self):
+        out = build_graph_data.cap_train(self.pool, 100, 0.5, seed=3)
+        self.assertEqual(out, build_graph_data.cap_train(self.pool, 100, 0.5, seed=3))
+        shuffled = list(self.pool)
+        random.Random(0).shuffle(shuffled)
+        again = build_graph_data.cap_train(shuffled, 100, 0.5, seed=3)
+        self.assertEqual({graph_examples.prompt_key(e) for e in again}, {graph_examples.prompt_key(e) for e in out})
+
+    def test_multi_share_zero_is_the_old_uniform_cap(self):
+        self.assertEqual(build_graph_data.cap_train(self.pool, 100, 0.0, seed=3),
+                         graph_examples.cap_balanced(self.pool, 100, 3))
+
+    def test_twin_sets_are_counted_per_group(self):
+        out = build_graph_data.cap_train(self.pool, 100, 0.5, seed=3)
+        groups = {ex["meta"]["group"] for ex in out if blocks_of(ex) >= 2}
+        self.assertEqual(build_graph_data.twin_sets(out, KB), len(groups))
+        self.assertEqual(build_graph_data.twin_sets([ex for ex in out if ex["meta"]["label"] == 1], KB), 0)
+
+
+class StratifiedHoldoutTests(unittest.TestCase):
+    """R17: varianti tenute fuori scelte in ciascuno strato (con chiamanti / a un blocco)."""
+
+    def fake(self, variant: str, n_blocks: int, i: int) -> dict:
+        blocks = [{"depth": d} for d in range(n_blocks)]
+        return {"meta": {"variant": variant, "label": i % 2, "trace": {"blocks": blocks}}}
+
+    def pool(self) -> list[dict]:
+        pool = []
+        for v in range(1, 19):  # 18 varianti a un blocco
+            pool += [self.fake(f"{v:02d}", 1, i) for i in range(120)]
+        for v in (51, 52, 53, 54, 63, 64):  # 6 varianti con chiamanti (60% a 2+ blocchi)
+            pool += [self.fake(str(v), 2 if i % 5 < 3 else 1, i) for i in range(150)]
+        pool += [self.fake("44", 1, i) for i in range(6)]  # troppo pochi esempi: non eleggibile
+        pool += [self.fake("42", 3, i) for i in range(99)]
+        return pool
+
+    def test_each_stratum_contributes_held_out_variants(self):
+        held, strata = build_graph_data.stratified_holdout(self.pool(), seed=42, pct=12)
+        self.assertEqual(set(strata["caller"]), {"51", "52", "53", "54", "63", "64"})
+        self.assertEqual(set(strata["single"]), {f"{v:02d}" for v in range(1, 19)})
+        self.assertEqual(set(strata["ineligible"]), {"42", "44"})
+        self.assertGreaterEqual(len(held & set(strata["caller"])), 1)
+        self.assertEqual(len(held & set(strata["single"])), 2)  # round(0.12 · 18)
+        self.assertFalse(held & {"42", "44"})
+        self.assertEqual(held, build_graph_data.stratified_holdout(self.pool(), seed=42, pct=12)[0])
+
+    def test_a_small_stratum_still_gives_one_variant(self):
+        pool = [self.fake("51", 2, i) for i in range(100)] + [self.fake(f"{v:02d}", 1, i) for v in range(1, 9)
+                                                               for i in range(100)]
+        held, strata = build_graph_data.stratified_holdout(pool, seed=1, pct=12)
+        self.assertEqual(strata["caller"], ["51"])
+        self.assertIn("51", held)
+        self.assertEqual(len(held & set(strata["single"])), 1)
 
 
 class CapPairsTests(unittest.TestCase):

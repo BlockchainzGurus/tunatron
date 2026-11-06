@@ -101,10 +101,14 @@ NEUTRAL_ORIGINS: dict[str, str] = {
 }
 NEUTRAL_FALLBACK = "the data reaches the sink through the blocks shown"
 
-# Prompt con il solo blocco a profondità 0 (view `sink_only`, o slice senza chiamanti): il reasoning afferma solo ciò che
+# View `sink_only` di una traccia CON chiamanti (solo il blocco a profondità 0 nel prompt): il reasoning afferma solo ciò che
 # il prompt mostra, quindi niente origine e niente «comes from …». Il motivo resta `PHRASES`/`GENERIC`: un esempio
 # solo-sink esiste solo se il suo prompt non è gemello di uno con l'etichetta opposta.
 SINK_ONLY_REASONING = "`{sink}` in `{fn}` (depth 0, only block shown): the origin of the data is not visible in this block; {reason}."
+
+# Slice senza chiamanti (la traccia ha un solo blocco, qualunque sia la view): un esempio così è decidibile solo se la
+# sorgente del dato sta nella funzione stessa, quindi si dice da dove viene (`_origin_clause`) invece di «non visibile» (R15).
+NO_CALLERS_REASONING = "`{sink}` in `{fn}` (depth 0, no callers in the slice): {origin}; {reason}."
 
 # Chiavi di `meta` calcolate qui: chi chiama passa solo le altre (`source`, `synthetic`, `track`, `group`, `variant`…).
 _COMPUTED = frozenset({"label", "kind", "cwe", "lang", "sink_function", "sink_line", "sink_kind", "func_hash", "view",
@@ -185,13 +189,19 @@ def _origin_clause(cwe_id: str, variant_kind: str, origin: str | None) -> str:
     return ORIGINS.get(origin, ORIGIN_FALLBACK)
 
 
-def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, sink_function: str, shown: list[dict]) -> str:
+def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, sink_function: str, shown: list[dict],
+               trace_blocks: int) -> str:
     """Sink, funzione del blocco mostrato più profondo (il primo, a parità) con la sua profondità, origine e motivo.
 
-    Con il solo blocco a profondità 0 nel prompt si usa `SINK_ONLY_REASONING`: nessuna affermazione su blocchi non mostrati.
+    Se la traccia ha un solo blocco (nessun chiamante, qualunque view) si usa `NO_CALLERS_REASONING`, con l'origine nel
+    blocco; se ha chiamanti ma il prompt mostra solo il blocco a profondità 0 si usa `SINK_ONLY_REASONING`: nessuna
+    affermazione su blocchi non mostrati.
     """
     sink_block = _sink_block(shown)
     reason = PHRASES.get((cwe_id, variant_kind), GENERIC[label])
+    if trace_blocks == 1:
+        return NO_CALLERS_REASONING.format(sink=sink_function, fn=sink_block["name"],
+                                           origin=_origin_clause(cwe_id, variant_kind, origin), reason=reason)
     if len(shown) == 1:
         return SINK_ONLY_REASONING.format(sink=sink_function, fn=sink_block["name"], reason=reason)
     root = max(shown, key=lambda b: b["depth"])
@@ -240,7 +250,7 @@ def build_example(rec: dict, kb: dict, *, label: int, variant_kind: str, origin:
         "sink_file": sink["file"],
         "sink_line": sink["line"],
         "vex_status": "affected" if vulnerable else "not_affected",
-        "reasoning": _reasoning(cwe_id, label, variant_kind, origin, sink["function"], shown),
+        "reasoning": _reasoning(cwe_id, label, variant_kind, origin, sink["function"], shown, len(trace["blocks"])),
         "suggested_fix": entry["fix_hint"] if vulnerable else NO_FIX,
     }
     messages.append({"role": "assistant", "content": json.dumps(finding, ensure_ascii=False)})

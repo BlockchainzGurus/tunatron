@@ -9,6 +9,7 @@ import re
 import unittest
 
 import common
+import graph_examples
 from c_anonymize import LEAK_RE
 from graph_examples import (
     G2B_FALLBACK,
@@ -17,6 +18,7 @@ from graph_examples import (
     JULIET_TRACK,
     NEUTRAL_FALLBACK,
     NEUTRAL_ORIGINS,
+    NO_CALLERS_REASONING,
     ORIGIN_FALLBACK,
     ORIGINS,
     PHRASES,
@@ -143,7 +145,7 @@ class BuildExampleTests(unittest.TestCase):
         self.assertLessEqual(set(tokens), set(ORIGINS))
         fragments = [*PHRASES.values(), *GENERIC.values(), *ORIGINS.values(), ORIGIN_FALLBACK,
                      *G2B_ORIGINS.values(), G2B_FALLBACK, *NEUTRAL_ORIGINS.values(), NEUTRAL_FALLBACK,
-                     SINK_ONLY_REASONING]
+                     SINK_ONLY_REASONING, NO_CALLERS_REASONING]
         for text in fragments:
             self.assertIsNone(LEAK_RE.search(text), text)
             self.assertNotIn("CVE-", text)
@@ -157,6 +159,11 @@ class BuildExampleTests(unittest.TestCase):
                     self.assertIn("`system`", reasoning)
                     self.assertIn("comes from `fn_d0d0d0` (depth 1)", reasoning)
                     self.assertNotIn("profondità", reasoning)
+                    alone = finding(example(sink_only(record(cwe=cwe)), int(kind == "bad"), kind, origin))
+                    self.assertIsNone(LEAK_RE.search(alone["reasoning"]), (cwe, kind, origin, alone["reasoning"]))
+                    self.assertNotIn("CVE-", alone["reasoning"])
+                    self.assertIn("(depth 0, no callers in the slice)", alone["reasoning"])
+                    self.assertEqual(common.validate_finding(alone), [])
 
     def test_origin_is_ignored_for_g2b_and_neutral_when_missing(self):
         g2b = finding(example(record(), 0, "g2b", "environment"))["reasoning"]
@@ -193,9 +200,13 @@ class BuildExampleTests(unittest.TestCase):
                 self.assertIsNone(LEAK_RE.search(reasoning))
                 self.assertNotIn("CVE-", reasoning)
                 self.assertEqual(common.validate_finding(finding(alone)), [])
-                # Stesso prompt, stessa etichetta: la slice senza chiamanti dà lo stesso reasoning del solo sink.
-                single = example(sink_only(rec), label, kind, origin)
-                self.assertEqual(finding(single)["reasoning"], reasoning)
+                # Stesso prompt, ma la slice senza chiamanti ha la sorgente nel blocco (R15): forma «in-blocco».
+                single = finding(example(sink_only(rec), label, kind, origin))
+                self.assertNotEqual(single["reasoning"], reasoning)
+                self.assertIn("no callers in the slice", single["reasoning"])
+                self.assertNotIn("not visible", single["reasoning"])
+                self.assertIn(graph_examples._origin_clause(cwe, kind, origin), single["reasoning"])
+                self.assertEqual(common.validate_finding(single), [])
                 full = finding(example(rec, label, kind, origin))["reasoning"]
                 self.assertIn("comes from `fn_a2a2a2` (depth 2)", full)
 
@@ -204,6 +215,26 @@ class BuildExampleTests(unittest.TestCase):
 
     def test_generic_sink_only_reasoning_makes_no_claim_about_unseen_blocks(self):
         self.assert_sink_only_claims_nothing_unseen(chain(3, "CWE-601", "redirect", "python"), "CWE-601", "redirect")
+
+    def test_single_block_slice_states_the_origin_in_the_block(self):
+        """R15: senza chiamanti la sorgente sta nel blocco: si dice da dove viene, non che non si vede."""
+        code = 'void fn_e0e0e0(void)\n{\n    char * data = getenv("ADD");\n    system(data);\n}'
+        rec = {"sink": {"function": "system", "file": "src/0a1b2c3d.c", "line": 13, "cwe_id": "CWE-78"},
+               "blocks": [block("fn_e0e0e0", 0, code, 10)], "truncated": False}
+        for view in ("callers", "sink_only"):
+            reasoning = finding(example(rec, 1, "bad", "environment", view=view))["reasoning"]
+            self.assertEqual(reasoning, NO_CALLERS_REASONING.format(
+                sink="system", fn="fn_e0e0e0", origin=ORIGINS["environment"], reason=PHRASES[("CWE-78", "bad")]))
+            self.assertIn("`system` in `fn_e0e0e0` (depth 0, no callers in the slice): ", reasoning)
+            self.assertNotIn("not visible", reasoning)
+        g2b = finding(example(rec, 0, "g2b", "environment"))["reasoning"]
+        self.assertIn(G2B_ORIGINS["CWE-78"], g2b)
+        self.assertNotIn(ORIGINS["environment"], g2b)
+        self.assertIn(NEUTRAL_ORIGINS["CWE-78"], finding(example(rec, 0, "good", None))["reasoning"])
+        # Traccia di 3 blocchi vista solo nel sink: resta SINK_ONLY_REASONING (R11).
+        alone = finding(example(chain(3), 1, "bad", "environment", view="sink_only"))["reasoning"]
+        self.assertEqual(alone, SINK_ONLY_REASONING.format(sink="system", fn="fn_a0a0a0",
+                                                           reason=PHRASES[("CWE-78", "bad")]))
 
     def test_cwe_outside_the_table_uses_the_generic_phrase(self):
         code = "def fn_c1c1c1(url):\n    return redirect(url)"
