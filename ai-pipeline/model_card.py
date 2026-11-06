@@ -247,35 +247,123 @@ DATA_LICENSES = (
 
 
 def _front_matter(ctx: dict) -> list[str]:
-    return ["---", "language:", "- it", "- en", f"base_model: {ctx['base_model']}", "library_name: transformers", "pipeline_tag: text-generation",
-            "license: other", f"license_name: {LICENSE_NAME}", f"license_link: {LICENSE_LINK}",
-            "tags:", "- security", "- sast", "- vulnerability-detection", "- dora", "---"]
+    return [
+        "---",
+        "language:",
+        "- it",
+        "- en",
+        f"base_model: {ctx['base_model']}",
+        "library_name: transformers",
+        "pipeline_tag: text-generation",
+        "license: other",
+        f"license_name: {LICENSE_NAME}",
+        f"license_link: {LICENSE_LINK}",
+        "tags:",
+        "- security",
+        "- sast",
+        "- vulnerability-detection",
+        "- dora",
+        "- cwe",
+        "- nemotron",
+        "- unsloth",
+        "- vllm",
+        "---",
+    ]
+
+
+def _format_target_modules(modules) -> str:
+    """Format target modules as clean backticked identifiers, parsing PEFT/Unsloth regexes if needed."""
+    if isinstance(modules, list):
+        return ", ".join(f"`{m}`" for m in modules)
+    if isinstance(modules, str):
+        # PEFT / Unsloth writes a regex like (?!.*(?:vision...)).*?\.(?:q_proj|k_proj|...)
+        last_group = re.search(r"\(\?:([a-zA-Z0-9_|]+)\)\s*$", modules)
+        if last_group:
+            tokens = [t for t in last_group.group(1).split("|") if t]
+            return ", ".join(f"`{t}`" for t in tokens)
+        found = re.findall(r"\b[a-zA-Z0-9_]+_proj\b", modules)
+        if found:
+            seen = set()
+            dedup = [x for x in found if not (x in seen or seen.add(x))]
+            return ", ".join(f"`{x}`" for x in dedup)
+        return f"`{modules}`"
+    return "n/d"
 
 
 def _summary(ctx: dict) -> list[str]:
-    return [f"This model is a fine-tuned version of `{ctx['base_model']}` for static application security testing (SAST) triage. Given a CWE "
-            "rule, a candidate sink and the backward code slice that reaches it, it decides whether the sink is really vulnerable and answers "
-            "with a JSON finding that follows a fixed schema (`vulnerable`, `vex_status`, `severity`, `reasoning`, `suggested_fix`).",
-            "",
-            "The system prompt is in Italian, and `reasoning` and `suggested_fix` are written in Italian. Supported code languages: C, C++ and Python."]
+    return [
+        f"> [!NOTE]\n"
+        f"> **Tunatron** is a fine-tuned version of `{ctx['base_model']}` for static application security testing (SAST) triage.\n"
+        "> Given a CWE rule, a candidate sink, and the backward code slice that reaches it, it decides whether the sink is genuinely vulnerable "
+        "and produces a structured JSON finding (`vulnerable`, `vex_status`, `severity`, `reasoning`, `suggested_fix`).",
+        "",
+        "The system prompt is in Italian, and `reasoning` and `suggested_fix` are written in Italian. Supported code languages: C, C++ and Python.",
+        "",
+        "### Key Features",
+        "- **Targeted Triage**: Analyzes backward code slices against CWE vulnerability indicators and safe patterns.",
+        "- **Strict JSON Schema**: High compliance with deterministic outputs, designed for direct ingestion into security pipelines.",
+        "- **Optimized for Blackwell & Ada**: Benchmarked with vLLM across BF16, FP8, and NVFP4 quantizations.",
+        "",
+        "### Quickstart with vLLM",
+        "```python",
+        "from vllm import LLM, SamplingParams",
+        "",
+        f"llm = LLM(model=\"{ctx['base_model']}\", trust_remote_code=True)  # or local model_bf16 / model_fp8",
+        "",
+        'prompt = """<extra_id_0>System',
+        "Sei un analizzatore di sicurezza SAST. Ricevi la regola di una CWE, un sink candidato e la traccia di codice (backward slice) che lo raggiunge. Stabilisci se il sink e' realmente vulnerabile a quella CWE. Rispondi ESCLUSIVAMENTE con un oggetto JSON conforme allo schema richiesto.",
+        "<extra_id_1>User",
+        "## Regola CWE",
+        "CWE-78 - OS Command Injection",
+        "## Sink candidato",
+        "- Funzione: system",
+        "- File: app.c",
+        "- Riga: 42",
+        "## Traccia di codice",
+        "42 | system(user_input);",
+        "## Compito",
+        "Valuta se il sink e' vulnerabile a CWE-78.",
+        "<extra_id_1>Assistant",
+        '"""',
+        "",
+        "params = SamplingParams(temperature=0.0, max_tokens=1024)",
+        "outputs = llm.generate([prompt], params)",
+        "print(outputs[0].outputs[0].text)",
+        "```",
+        "",
+        "### Expected Output Schema",
+        "```json",
+        "{",
+        '  "vulnerable": true,',
+        '  "cwe_id": "CWE-78",',
+        '  "severity": "HIGH",',
+        '  "sink_function": "system",',
+        '  "sink_file": "app.c",',
+        '  "sink_line": 42,',
+        '  "vex_status": "affected",',
+        '  "reasoning": "Il sink riceve input non fidato senza sanitizzazione...",',
+        '  "suggested_fix": "Utilizzare funzioni con array di argomenti (es. execv) invece di invocare una shell di sistema."',
+        "}",
+        "```",
+    ]
 
 
 def _intended_use() -> list[str]:
-    return ["- Intended as a triage aid for human reviewers, not as a replacement for a SAST engine or a security review.",
-            "- It expects the prompt format of this project (CWE rule, candidate sink, numbered backward slice); other prompt styles are not evaluated.",
-            "- Trained and evaluated on C, C++ and Python functions from public vulnerability datasets; results may not transfer to other languages "
-            "or to proprietary code.",
-            "- License and data terms: see the License and attributions section."]
+    return [
+        "- **Triage Assistant**: Intended as a triage aid for human reviewers, not as a replacement for a SAST engine or a formal security audit.",
+        "- **Specific Prompt Format**: It expects the prompt format of this project (CWE rule, candidate sink, numbered backward slice); other prompt styles are not evaluated.",
+        "- **Trained Languages**: Trained and evaluated on C, C++ and Python functions from public vulnerability datasets; results may not transfer to other languages or to proprietary code.",
+        "- **License and Attributions**: See the License and attributions section for base model and dataset terms.",
+    ]
 
 
 def _training(ctx: dict) -> list[str]:
     lines = [f"- Base model: `{ctx['base_model']}`"]
     adapter, hyper = ctx["adapter"], ctx["hyper"]
     if adapter:
-        modules = adapter.get("target_modules")
-        modules = ", ".join(modules) if isinstance(modules, list) else _fmt(modules)
+        formatted_modules = _format_target_modules(adapter.get("target_modules"))
         lines.append(f"- Method: {'DoRA' if adapter.get('use_dora') else 'LoRA'} (rank {_fmt(adapter.get('r'))}, alpha {_fmt(adapter.get('lora_alpha'))}) "
-                     f"on {modules}")
+                     f"on {formatted_modules}")
     else:
         lines.append("- Adapter: not available: adapter_config.json was not found.")
     if hyper:
@@ -399,7 +487,14 @@ def render_card(ctx: dict) -> str:
     sections = (("Summary", _summary(ctx)), ("Intended use and limitations", _intended_use()), ("Training", _training(ctx)), ("Data", _data(ctx)),
                 ("Evaluation", _evaluation(ctx)), ("Efficiency", _efficiency(ctx)), ("Files and reproduction", _files(ctx)),
                 ("License and attributions", _license()))
-    parts = _front_matter(ctx) + ["", "# Tunatron SAST triage model", ""]
+    badges = [
+        f"[![Base Model](https://img.shields.io/badge/Base_Model-Nemotron--3--Nano--4B-792ee5?style=flat-square)](https://huggingface.co/{ctx['base_model']})",
+        "[![Fine-Tuning Method](https://img.shields.io/badge/Fine--Tuning-DoRA-10b981?style=flat-square)](#training)",
+        "[![Task](https://img.shields.io/badge/Task-SAST_Triage_&_Security-f59e0b?style=flat-square)](#intended-use-and-limitations)",
+        "[![Inference](https://img.shields.io/badge/Inference-vLLM_|_Transformers-3b82f6?style=flat-square)](#quickstart-with-vllm)",
+        f"[![License](https://img.shields.io/badge/License-NVIDIA_Nemotron_Open_Model-gray?style=flat-square)]({LICENSE_LINK})",
+    ]
+    parts = _front_matter(ctx) + ["", "# Tunatron SAST triage model", "", " ".join(badges), ""]
     for title, body in sections:
         parts += [f"## {title}", "", *body, ""]
     return "\n".join(parts)

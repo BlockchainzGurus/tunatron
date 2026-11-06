@@ -292,6 +292,17 @@ class RenderCardTests(unittest.TestCase):
         for fragment in ("DoRA", "rank 64", "adamw_8bit", "effective batch size 8", "8192", "3407", "1 h 30 min", "torch 2.14.1", "abc123"):
             self.assertIn(fragment, training)
 
+    def test_peft_regex_target_modules_are_cleaned_into_clean_identifiers(self):
+        regex = (
+            "(?!.*(?:vision|image|visual|patch))(?!(?:.*\\.)?(?:codec_model|audio_tokenizer|acoustic_tokenizer|semantic_tokenizer)\\.).*?"
+            "(?:self_attn|attention|attn|mixer|mlp|feed_forward|ffn|dense|mixer).*?\\.(?:q_proj|k_proj|v_proj|o_proj|up_proj|down_proj|in_proj)"
+        )
+        ctx = full_ctx()
+        ctx["adapter"]["target_modules"] = regex
+        training = section(model_card.render_card(ctx), "Training")
+        self.assertIn("`q_proj`, `k_proj`, `v_proj`, `o_proj`, `up_proj`, `down_proj`, `in_proj`", training)
+        self.assertNotIn("(?!.*", training)
+
     def test_the_card_is_english_only(self):
         accents = "àèéìòùÀÈÉÌÒÙ"
         for ctx in (full_ctx(), empty_ctx()):
