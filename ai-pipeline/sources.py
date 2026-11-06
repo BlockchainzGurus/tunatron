@@ -6,7 +6,7 @@ Campi extra riconosciuti da `prepare_data.build_example`:
                 localizzare il sink col diff
   sink_hint     {"callee", "line"} già noto (commenti FLAW/FIX di Juliet)
   kind          "vulnerable" | "patched" | "benign" forzato
-  note          riga di commit message, usata nel ragionamento quando manca la descrizione CVE
+  note          riga di commit message (informativa: il target NON la usa, vedi `prepare_data._reasoning`)
   source / synthetic   provenienza dell'esempio
 
 Formati: .parquet (richiede pyarrow, installato da scripts/setup_env.sh), .jsonl, .csv.
@@ -179,16 +179,20 @@ def codeql_files(root: Path) -> Iterator[tuple[str, str]]:
                 yield path.relative_to(root).as_posix(), path.read_text(encoding="utf-8", errors="replace")
 
 
-def codeql_records(files: Iterable[tuple[str, str]], kb: dict) -> Iterator[dict]:
+def codeql_records(files: Iterable[tuple[str, str]], kb: dict, skip_python: bool = False) -> Iterator[dict]:
     """Un record per ogni chiamata-sink di ogni funzione dei test CodeQL: `$ Alert` = vulnerabile, sink senza annotazione = sicuro.
 
     Le annotazioni e i commenti GOOD/BAD vengono tolti dal codice (non devono finire nel prompt) senza spostare le righe.
     Le righe `MISSING:`/`SPURIOUS:` sono ambigue e vengono escluse. La CWE viene dal nome della directory del test.
+    Con `skip_python` i file `.py` non producono record (con `--graph-dir` i test Python hanno la loro versione con slice);
+    i record C/C++ restano identici e nello stesso ordine.
     """
     for path, text in files:
         m = re.search(r"CWE-?(\d+)", path)
         suffix = Path(path).suffix.lower()
         if not m or suffix not in CODEQL_SUFFIXES or "py2" in path:
+            continue
+        if skip_python and CODEQL_SUFFIXES[suffix] == "python":
             continue
         cwe = common.resolve_cwe(kb, f"CWE-{int(m.group(1))}")
         if cwe is None:

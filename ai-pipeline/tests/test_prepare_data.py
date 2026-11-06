@@ -1,12 +1,17 @@
 """Test di prepare_data.py con record PrimeVul sintetici (nessun download)."""
+import contextlib
+import io
 import json
 import random
+import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import common
 import prepare_data as pd
+from c_anonymize import LEAK_RE
 
 KB = common.load_kb()
 
@@ -120,9 +125,9 @@ class BuildExampleTests(unittest.TestCase):
             (finding["vulnerable"], finding["cwe_id"], finding["severity"], finding["sink_function"], finding["sink_file"], finding["sink_line"], finding["vex_status"]),
             (True, "CWE-120", "HIGH", "strcpy", "a.c", 3, "affected"),
         )
-        self.assertIn("CVE-2020-1", finding["reasoning"])
-        self.assertIn("Buffer overflow in copy_name", finding["reasoning"])
-        self.assertEqual(finding["suggested_fix"], next(e for e in KB["entries"] if e["id"] == "CWE-120")["fix_hint"])
+        entry = next(e for e in KB["entries"] if e["id"] == "CWE-120")
+        self.assertEqual(finding["reasoning"], f"The sink `strcpy` at line 3 of a.c receives unvalidated data and is vulnerable to CWE-120 ({entry['name']}).")
+        self.assertEqual(finding["suggested_fix"], entry["fix_hint"])
 
         user = ex["messages"][1]["content"]
         self.assertIn("CWE-120 — Buffer Copy without Checking Size of Input", user)
@@ -155,13 +160,17 @@ class BuildExampleTests(unittest.TestCase):
         self.assertEqual((finding["cwe_id"], finding["sink_function"], finding["sink_line"]), ("CWE-416", "free", 2))
         self.assertEqual(ex["meta"]["kind"], "benign")
 
-    def test_upstream_fix_diff_is_used_when_the_patched_pair_is_known(self):
+    def test_vulnerable_suggested_fix_is_catalog_hint_not_upstream_diff(self):
+        """Anche con la versione corretta nota (mappa `patched` o `counterpart`) il fix è il suggerimento del catalogo."""
+        hint = next(e for e in KB["entries"] if e["id"] == "CWE-120")["fix_hint"]
         patched = {("c1", "copy_name"): FIXED_FUNC}
-        ex, _ = pd.build_example(record(), KB, patched=patched, max_chars=12000)
-        fix = json.loads(ex["messages"][2]["content"])["suggested_fix"]
-        self.assertTrue(fix.startswith("Apply the upstream fix:"), fix)
-        self.assertIn("-    strcpy(dst, src);", fix)
-        self.assertIn('+    snprintf(dst, 16, "%s", src);', fix)
+        for name, ex in (("patched map", pd.build_example(record(), KB, patched=patched, max_chars=12000)[0]),
+                         ("counterpart", pd.build_example(record(counterpart=FIXED_FUNC), KB, patched={}, max_chars=12000)[0])):
+            with self.subTest(name):
+                fix = json.loads(ex["messages"][2]["content"])["suggested_fix"]
+                self.assertEqual(fix, hint)
+                for diff_line in ("@@", "upstream", "-    strcpy(dst, src);", '+    snprintf(dst, 16, "%s", src);'):
+                    self.assertNotIn(diff_line, fix)
 
     def test_skip_reasons(self):
         cases = [
@@ -269,9 +278,46 @@ class BuildExampleTests(unittest.TestCase):
         ex, _ = self.build(record())
         self.assertEqual((ex["meta"]["source"], ex["meta"]["synthetic"]), ("primevul", False))
 
-    def test_commit_message_note_is_added_to_the_reasoning_when_there_is_no_cve_text(self):
-        ex, _ = self.build(record(cve_desc="None", note="[media] avoid use-after-free"))
-        self.assertIn("avoid use-after-free", json.loads(ex["messages"][2]["content"])["reasoning"])
+    def test_vulnerable_reasoning_has_no_cve_id_description_or_commit_note(self):
+        rec = record(cve="CVE-2020-1", cve_desc="boom", note="fix x")
+        for name, kw in (("with counterpart", {"counterpart": FIXED_FUNC}), ("without", {})):
+            with self.subTest(name):
+                ex, _ = self.build({**rec, **kw})
+                assistant = ex["messages"][2]["content"]
+                self.assertEqual(re.findall(r"CVE-\d{4}-\d+", assistant), [])
+                for leaked in ("CVE-", "boom", "fix x", "Description", "Upstream"):
+                    self.assertNotIn(leaked, assistant)
+                self.assertEqual(ex["meta"]["cve"], "CVE-2020-1", "il CVE resta nei metadati, non nel testo del target")
+
+    def test_safe_reasoning_has_no_cve_note_or_label_words(self):
+        """Patch e benigni: stessa frase per entrambi, nessun materiale CVE, nessuna parola-spia (`fix`, `good`, ...)."""
+        fixed = FIXED_FUNC.replace('snprintf(dst, 16, "%s", src)', "strncpy(dst, src, 15)")
+        patched = record(target=0, func=fixed, cve="CVE-2020-1", cve_desc="boom", note="fix x", counterpart=VULN_FUNC)
+        benign = record(target=0, cwe=[], cve="None", cve_desc="None", commit_id="None", func="void g(char *p) {\n  free(p);\n}")
+        entry120 = next(e for e in KB["entries"] if e["id"] == "CWE-120")
+        entry416 = next(e for e in KB["entries"] if e["id"] == "CWE-416")
+        for rec, kind, (callee, line), entry in ((patched, "patched", ("strncpy", 3), entry120), (benign, "benign", ("free", 2), entry416)):
+            with self.subTest(kind):
+                ex, reason = self.build(rec, sinkless="function")
+                self.assertIsNone(reason)
+                finding = json.loads(ex["messages"][2]["content"])
+                self.assertEqual(ex["meta"]["kind"], kind)
+                self.assertEqual(finding["reasoning"], f"The sink `{callee}` at line {line} of a.c does not receive untrusted data: the value reaching it is "
+                                 f"constant or checked before use, so it is not vulnerable to {entry['id']} ({entry['name']}).")
+                self.assertEqual(finding["suggested_fix"], pd.NO_FIX)
+                for leaked in ("CVE-", "boom", "fix x", "fixed version"):
+                    self.assertNotIn(leaked, finding["reasoning"])
+
+    def test_no_reasoning_for_any_catalog_entry_contains_a_label_word(self):
+        """`_reasoning` non deve dire «fixed», «good», ...: sarebbe la risposta, non una prova."""
+        sink = {"callee": "f", "line": 1}
+        for entry in KB["entries"]:
+            for kind in ("vulnerable", "patched", "benign"):
+                with self.subTest(entry["id"], kind=kind):
+                    text = pd._reasoning(kind, sink, "a.c", entry)
+                    if kind != "vulnerable":
+                        self.assertIsNone(LEAK_RE.search(text), text)
+                    self.assertIsNone(re.search(r"CVE-\d", text))
 
     def test_missing_file_name_gets_a_stable_label(self):
         ex, _ = self.build(record(file_name="None"))
@@ -303,6 +349,7 @@ class SplitAndBalanceTests(unittest.TestCase):
 
 
 def write_jsonl(path: Path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
@@ -626,3 +673,265 @@ class MultiSourceEndToEndTests(unittest.TestCase):
         self.run_main(self.raw, self.out, "--juliet-per-cwe", "3")
         groups = {e["meta"]["commit_id"] for name in ("train", "val") for e in self.load(name) if e["meta"]["source"] == "juliet"}
         self.assertLessEqual(len(groups), 3)
+
+    # ---- --graph-dir: esempi con slice -----------------------------------------------------------------------------
+    def write_graph_dir(self) -> Path:
+        graph = self.raw / "graph"
+        write_jsonl(graph / "a_train.jsonl", [graph_example(i, i % 2, n_blocks=[1, 2, 3, 2, 1, 2][i], view="sink_only" if i == 3 else "callers") for i in range(6)])
+        write_jsonl(graph / "b_train.jsonl", [graph_example(10 + i, i % 2, source="py-synth", track="py_synth") for i in range(2)])
+        write_jsonl(graph / "a_val.jsonl", [graph_example(20 + i, i % 2) for i in range(3)])
+        write_jsonl(graph / "c_test.jsonl", [graph_example(30, 1)])  # un file di valutazione: mai letto
+        (graph / "juliet_report.json").write_text("{}", encoding="utf-8")
+        return graph
+
+    def read_lines(self, out: Path, name: str) -> list[dict]:
+        return [json.loads(l) for l in (out / f"{name}.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    def test_juliet_is_no_longer_a_default_source(self):
+        self.assertNotIn("juliet", pd.ALL_SOURCES)
+
+    def test_graph_dir_examples_go_to_train_and_val_only_and_test_is_unchanged(self):
+        self.run_main(self.raw, self.out)
+        graph = self.write_graph_dir()
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            self.run_main(self.raw, other, "--graph-dir", str(graph))
+            self.assertEqual((self.out / "test.jsonl").read_bytes(), (other / "test.jsonl").read_bytes(), "il test non cambia nemmeno di un byte")
+            test_sources = lambda out: collections.Counter(e["meta"]["source"] for e in self.read_lines(out, "test"))  # noqa: E731
+            self.assertEqual(test_sources(self.out), test_sources(other))
+            self.assertNotIn("py-synth", test_sources(other))
+
+            for name, expected in (("train", {"juliet-nist": 6, "py-synth": 2}), ("val", {"juliet-nist": 3})):
+                got = collections.Counter(e["meta"]["source"] for e in self.read_lines(other, name) if e["meta"].get("track"))
+                self.assertEqual(dict(got), expected, name)
+                old = lambda out: sorted(json.dumps(e, sort_keys=True) for e in self.read_lines(out, name) if not e["meta"].get("track"))  # noqa: E731
+                self.assertEqual(old(self.out), old(other), f"{name}: gli esempi delle fonti vecchie non cambiano")
+            self.assertNotIn("c_test", json.dumps(self.read_lines(other, "train")))
+            stats = json.loads((other / "stats.json").read_text(encoding="utf-8"))
+            self.assertEqual(stats["train"]["graph_added"], 8)
+            self.assertEqual(stats["val"]["graph_added"], 3)
+            self.assertEqual(stats["test"]["graph_added"], 0)
+            self.assertEqual(stats["train"]["by_source"]["juliet-nist"]["kept"], {"vulnerable": 3, "patched": 3})
+
+    def test_output_is_deterministic_with_a_graph_dir(self):
+        graph = self.write_graph_dir()
+        self.run_main(self.raw, self.out, "--graph-dir", str(graph))
+        with tempfile.TemporaryDirectory() as other:
+            self.run_main(self.raw, Path(other), "--graph-dir", str(graph))
+            for name in ("train.jsonl", "val.jsonl", "test.jsonl"):
+                self.assertEqual((self.out / name).read_bytes(), (Path(other) / name).read_bytes(), name)
+
+    def test_graph_examples_colliding_with_the_test_set_or_already_collected_are_dropped(self):
+        self.run_main(self.raw, self.out)
+        test_user = next(m["content"] for m in self.read_lines(self.out, "test")[0]["messages"] if m["role"] == "user")
+        train_user = next(m["content"] for m in self.read_lines(self.out, "train")[0]["messages"] if m["role"] == "user")
+        clash_test, clash_train, fresh = graph_example(1, 1), graph_example(2, 1), graph_example(3, 1)
+        for ex, text in ((clash_test, test_user), (clash_train, train_user)):
+            ex["messages"][1]["content"] = text
+            ex["meta"]["func_hash"] = pd.func_hash(text)
+        clash_train["meta"]["label"] = self.read_lines(self.out, "train")[0]["meta"]["label"]
+        graph = self.raw / "graph"
+        write_jsonl(graph / "a_train.jsonl", [clash_test, clash_train, fresh, fresh])
+        with tempfile.TemporaryDirectory() as other:
+            self.run_main(self.raw, Path(other), "--graph-dir", str(graph))
+            added = [e for e in self.read_lines(Path(other), "train") if e["meta"].get("track")]
+            self.assertEqual([e["meta"]["func_hash"] for e in added], [fresh["meta"]["func_hash"]])
+            stats = json.loads((Path(other) / "stats.json").read_text(encoding="utf-8"))
+            self.assertEqual(stats["train"]["graph_removed"], {"in_test": 1, "duplicate": 2})
+            self.assertEqual(stats["train"]["graph_added"], 1)
+
+    def test_graph_dir_that_does_not_exist_is_a_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.run_main(self.raw, self.out, "--graph-dir", str(self.raw / "nope"))
+        self.assertIn("non è una cartella", err.getvalue())
+
+    def write_codeql_with_c(self):
+        root = self.write_codeql()
+        c_dir = root / "cpp" / "ql" / "test" / "query-tests" / "Security" / "CWE" / "CWE-120"
+        c_dir.mkdir(parents=True)
+        for i in range(40):
+            (c_dir / f"case{i}.c").write_text(
+                f"void bad_copy{i}(char *s) {{\n    char buf[10];\n    strcpy(buf, s); // $ Alert\n}}\n\n"
+                f"void good_copy{i}(char *s) {{\n    char buf[10];\n    strncpy(buf, s, 9); // GOOD\n}}\n",
+                encoding="utf-8",
+            )
+        return root
+
+    def test_graph_dir_skips_python_codeql_but_keeps_c(self):
+        root = self.write_codeql_with_c()
+        graph = self.write_graph_dir()
+        self.run_main(self.raw, self.out, "--codeql", str(root))
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            self.run_main(self.raw, other, "--codeql", str(root), "--graph-dir", str(graph))
+            codeql = lambda out, name: collections.Counter(  # noqa: E731
+                (e["meta"]["lang"], e["meta"]["kind"]) for e in self.read_lines(out, name) if e["meta"]["source"] == "codeql-tests")
+            self.assertTrue(any(lang == "python" for lang, _ in codeql(self.out, "train")), "senza graph-dir i Python di CodeQL stanno nel train")
+            for name in ("train", "val"):
+                self.assertEqual({lang for lang, _ in codeql(other, name)} - {"c"}, set(), f"{name}: niente Python di CodeQL")
+            self.assertTrue(any(lang == "c" for lang, _ in codeql(other, "train")), "i C di CodeQL restano")
+            self.assertEqual(codeql(self.out, "test"), codeql(other, "test"), "la composizione del test non cambia")
+            self.assertTrue(any(lang == "python" for lang, _ in codeql(other, "test")))
+            self.assertEqual((self.out / "test.jsonl").read_bytes(), (other / "test.jsonl").read_bytes())
+
+    def test_graph_dir_length_filter_drops_and_counts_per_source(self):
+        limit = int(8192 * 3.5)
+        graph = self.raw / "graph"
+        short = graph_example(1, 1)
+        edge = graph_example(2, 0)  # il prompt è lungo quanto serve per arrivare al limite esatto
+        edge["messages"][1]["content"] ="u" * (limit - len(edge["messages"][2]["content"]))
+        edge["meta"]["func_hash"] = pd.func_hash(edge["messages"][1]["content"])
+        over = graph_example(3, 1, source="py-synth", track="py_synth")
+        over["messages"][1]["content"] = "v" * (limit - len(over["messages"][2]["content"]) + 1)
+        over["meta"]["func_hash"] = pd.func_hash(over["messages"][1]["content"])
+        write_jsonl(graph / "a_train.jsonl", [short, edge, over])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.run_main(self.raw, self.out, "--graph-dir", str(graph))
+        kept = {e["meta"]["func_hash"] for e in self.read_lines(self.out, "train") if e["meta"].get("track")}
+        self.assertEqual(kept, {short["meta"]["func_hash"], edge["meta"]["func_hash"]}, "esattamente al limite resta, un carattere oltre no")
+        stats = json.loads((self.out / "stats.json").read_text(encoding="utf-8"))
+        self.assertEqual(stats["train"]["too_long_dropped"], {"py-synth": 1})
+        self.assertEqual(stats["val"]["too_long_dropped"], {})
+        self.assertIn("py-synth: 1", err.getvalue())
+
+    def test_length_filter_applies_to_train_and_val_of_every_source_but_not_to_the_test(self):
+        self.run_main(self.raw, self.out)
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            self.run_main(self.raw, other, "--max-seq-length", "450")  # 1.575 caratteri: taglia quasi tutto
+            stats = json.loads((other / "stats.json").read_text(encoding="utf-8"))
+            for name in ("train", "val"):
+                limit = 450 * 3.5
+                for e in self.read_lines(other, name):
+                    self.assertLessEqual(sum(len(m["content"]) for m in e["messages"] if m["role"] != "system"), limit)
+                dropped = sum(stats[name]["too_long_dropped"].values())
+                self.assertGreater(dropped, 0, name)
+                self.assertEqual(len(self.read_lines(other, name)) + dropped, len(self.read_lines(self.out, name)), name)
+                self.assertIn("primevul", stats[name]["too_long_dropped"])
+            self.assertEqual((self.out / "test.jsonl").read_bytes(), (other / "test.jsonl").read_bytes())
+            self.assertEqual(stats["test"]["too_long_dropped"], {})
+
+    def test_report_lists_sizes_source_counts_and_trace_shares(self):
+        graph = self.write_graph_dir()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.run_main(self.raw, self.out, "--graph-dir", str(graph))
+        stats = json.loads((self.out / "stats.json").read_text(encoding="utf-8"))
+        for name in ("train", "val", "test"):
+            self.assertEqual(stats[name]["file_bytes"], (self.out / f"{name}.jsonl").stat().st_size, name)
+            self.assertFalse(stats[name]["over_size_limit"])
+            self.assertEqual(stats[name]["source_counts"], dict(collections.Counter(e["meta"]["source"] for e in self.read_lines(self.out, name))), name)
+        shares = stats["train"]["trace_shares"]
+        self.assertEqual(shares["juliet"], {"examples": 6, "multi_block": 4, "multi_block_share": round(4 / 6, 4), "sink_only": 1, "sink_only_share": round(1 / 6, 4)})
+        self.assertEqual(shares["py_synth"]["multi_block"], 2)
+        text = err.getvalue()
+        self.assertIn("train.jsonl", text)
+        self.assertIn("juliet-nist", text)
+        self.assertIn("66.7%", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_report_warns_for_files_over_50_mb(self):
+        self.assertEqual(pd.MAX_FILE_BYTES, 50 * 1024 * 1024)
+        with tempfile.TemporaryDirectory() as d:
+            small, big = Path(d) / "small.jsonl", Path(d) / "big.jsonl"
+            small.write_bytes(b"x" * 5)
+            big.write_bytes(b"x" * 20)
+            sizes, warnings = pd.size_report([small, big], limit=10)
+            self.assertEqual(sizes, {"small.jsonl": 5, "big.jsonl": 20})
+            self.assertEqual(len(warnings), 1)
+            self.assertIn("WARNING", warnings[0])
+            self.assertIn("big.jsonl", warnings[0])
+            self.assertEqual(pd.size_report([small, big], limit=20)[1], [], "il limite stesso non è superato")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch.object(pd, "MAX_FILE_BYTES", 10):
+            self.run_main(self.raw, self.out)
+        self.assertIn("WARNING", err.getvalue())
+        self.assertIn("train.jsonl", [l for l in err.getvalue().splitlines() if "WARNING" in l][0])
+        stats = json.loads((self.out / "stats.json").read_text(encoding="utf-8"))
+        self.assertTrue(stats["train"]["over_size_limit"])
+
+
+def graph_example(i: int, label: int, *, source: str = "juliet-nist", track: str = "juliet", view: str = "callers",
+                  n_blocks: int = 2) -> dict:
+    """Esempio con slice minimo (la forma che scrivono i file `data/graph/*_{train,val}.jsonl`): solo i campi che main legge."""
+    user = f"### graph prompt {i} {source}"
+    finding = {"vulnerable": bool(label), "cwe_id": "CWE-78", "severity": "HIGH" if label else "NONE", "sink_function": "system",
+               "sink_file": "src/a.c", "sink_line": 4, "vex_status": "affected" if label else "not_affected", "reasoning": "r",
+               "suggested_fix": "fix" if label else pd.NO_FIX}
+    blocks = [{"depth": d, "name": f"fn_{d}"} for d in range(n_blocks - 1, -1, -1)]
+    return {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": user},
+                         {"role": "assistant", "content": json.dumps(finding)}],
+            "meta": {"source": source, "synthetic": False, "track": track, "group": f"g{i}", "variant": "01", "label": label,
+                     "kind": "vulnerable" if label else "patched", "cwe": "CWE-78", "lang": "c", "sink_function": "system", "sink_line": 4,
+                     "sink_kind": "call", "func_hash": pd.func_hash(user), "view": view, "pair_id": None,
+                     "trace": {"cwe_id": "CWE-78", "sink": {}, "blocks": blocks}}}
+
+
+class GraphHelpersTests(unittest.TestCase):
+    def test_load_reads_train_and_val_files_in_name_order_and_skips_blank_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            graph = Path(d)
+            (graph / "b_train.jsonl").write_text(json.dumps(graph_example(2, 1)) + "\n\n   \n" + json.dumps(graph_example(3, 0)) + "\n", encoding="utf-8")
+            write_jsonl(graph / "a_train.jsonl", [graph_example(1, 1)])
+            write_jsonl(graph / "a_val.jsonl", [graph_example(4, 0)])
+            write_jsonl(graph / "z_test.jsonl", [graph_example(5, 0)])
+            (graph / "juliet_report.json").write_text("{not json", encoding="utf-8")
+            loaded = pd.load_graph_examples(graph)
+            self.assertEqual([e["meta"]["group"] for e in loaded["train"]], ["g1", "g2", "g3"])
+            self.assertEqual([e["meta"]["group"] for e in loaded["val"]], ["g4"])
+            self.assertEqual(set(loaded), {"train", "val"})
+
+    def test_load_rejects_lines_without_messages_or_meta(self):
+        good = graph_example(1, 1)
+        for name, bad in (("no meta", {"messages": good["messages"]}), ("no messages", {"meta": good["meta"]}),
+                          ("meta not a dict", {**good, "meta": []}), ("not an object", [1]),
+                          ("no assistant", {**good, "messages": good["messages"][:2]})):
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                (Path(d) / "x_train.jsonl").write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n", encoding="utf-8")
+                with self.assertRaises(ValueError) as ctx:
+                    pd.load_graph_examples(Path(d))
+                self.assertIn("x_train.jsonl:2", str(ctx.exception))
+
+    def test_an_empty_graph_dir_gives_empty_lists(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(pd.load_graph_examples(Path(d)), {"train": [], "val": []})
+
+    def test_merge_removes_test_collisions_and_duplicates_but_keeps_order(self):
+        existing = [graph_example(1, 1), graph_example(2, 0)]
+        in_test = graph_example(3, 1)
+        test_prompts = {pd.prompt_hash(in_test)}
+        new = [graph_example(4, 1), in_test, graph_example(1, 1), graph_example(4, 1), graph_example(5, 0)]
+        merged, removed = pd.merge_graph_examples(existing, new, test_prompts, set())
+        self.assertEqual([e["meta"]["group"] for e in merged], ["g1", "g2", "g4", "g5"])
+        self.assertEqual(removed, {"in_test": 1, "duplicate": 2})
+        self.assertEqual(pd.merge_graph_examples([], [], set(), set()), ([], {}))
+        # lo stesso prompt con l'etichetta opposta non è un duplicato esatto (e `drop_conflicts` non è affare di questo passo)
+        flipped = graph_example(1, 0)
+        self.assertEqual(len(pd.merge_graph_examples(existing, [flipped], set(), set())[0]), 3)
+        # il func_hash di un esempio di test (impronta della funzione) blocca anche un esempio con slice che porta lo stesso hash
+        clash = graph_example(6, 1)
+        self.assertEqual(pd.merge_graph_examples([], [clash], set(), {clash["meta"]["func_hash"]}), ([], {"in_test": 1}))
+
+    def test_drop_too_long_counts_per_source_and_keeps_the_exact_limit(self):
+        def ex(source, chars):
+            return {"messages": [{"role": "system", "content": "s" * 10_000}, {"role": "user", "content": "u" * (chars - 5)},
+                                 {"role": "assistant", "content": "a" * 5}], "meta": {"source": source}}
+
+        kept, dropped = pd.drop_too_long([ex("a", 100), ex("a", 101), ex("b", 150), ex("b", 99), ex("a", 200)], 100)
+        self.assertEqual([len(e["messages"][1]["content"]) + 5 for e in kept], [100, 99])
+        self.assertEqual(dropped, {"a": 2, "b": 1})
+        self.assertEqual(pd.drop_too_long([], 100), ([], {}))
+        self.assertEqual(pd.max_example_chars(8192), 8192 * 3.5)
+
+    def test_trace_shares_per_track(self):
+        examples = [graph_example(1, 1, n_blocks=3), graph_example(2, 0, n_blocks=1), graph_example(3, 0, view="sink_only"),
+                    graph_example(4, 1, track="py_codeql", source="codeql-tests"),
+                    {"messages": [], "meta": {"source": "primevul"}}]  # senza track: non conta
+        examples[1]["meta"].pop("trace")
+        shares = pd.trace_shares(examples)
+        self.assertEqual(set(shares), {"juliet", "py_codeql"})
+        self.assertEqual(shares["juliet"], {"examples": 3, "multi_block": 2, "multi_block_share": round(2 / 3, 4), "sink_only": 1, "sink_only_share": round(1 / 3, 4)})
+        self.assertEqual(shares["py_codeql"]["multi_block_share"], 1.0)
+        self.assertEqual(pd.trace_shares([]), {})

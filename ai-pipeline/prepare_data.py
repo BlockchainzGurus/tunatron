@@ -2,8 +2,15 @@
 """Converte PrimeVul nel formato `Slicing + CWE -> JSON VEX` usato per il fine-tuning.
 
 Fonti (tutte opzionali, vedi --help): PrimeVul, SecVulEval (C/C++, coppie vulnerabile/corretta), CVEfixes+PyVul (Python,
-coppie prima/dopo), Juliet (sintetico, sink marcato da FLAW) e i test di sicurezza di CodeQL (MIT, sink annotati a mano). Il sink di ogni esempio è *localizzato*: commento FLAW,
-oppure chiamata sulle righe che la fix tocca (diff), oppure la funzione stessa alla riga del bug (vedi localize.py).
+coppie prima/dopo) e i test di sicurezza di CodeQL (MIT, sink annotati a mano). Il sink di ogni esempio è *localizzato*: commento
+FLAW, oppure chiamata sulle righe che la fix tocca (diff), oppure la funzione stessa alla riga del bug (vedi localize.py).
+`--juliet` (il CSV di Juliet con le parole-etichetta nel codice) resta come lettore legacy: Juliet vero entra da `--graph-dir`.
+
+`--graph-dir DIR` aggiunge a train e val gli esempi con slice già costruiti (`DIR/*_train.jsonl`, `DIR/*_val.jsonl`, scritti da
+`build_graph_data.py` e dalle tracce Python): non entrano mai nel test, e i test CodeQL Python di train/val sono quelli con slice.
+
+Il target non contiene id CVE, descrizioni CVE, messaggi di commit né diff di fix di altri progetti: il reasoning è una frase
+fissa sul sink e `suggested_fix` è il suggerimento del catalogo (vulnerabili) oppure `NO_FIX`.
 
 Per ogni funzione con un sink noto alla KB (`sast-engine/cwe_kb.json`) produce un esempio di chat:
   system : stesso system prompt di sast-engine
@@ -20,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import difflib
 import hashlib
 import json
 import os
@@ -42,10 +48,13 @@ from localize import extract_function_name, find_calls  # noqa: F401  (ri-esport
 HF_BASE = "https://huggingface.co/datasets/colin/PrimeVul/resolve/main"
 PRIMEVUL_FILES = {"train": "primevul_train.jsonl", "valid": "primevul_valid.jsonl", "test": "primevul_test.jsonl"}
 NONE_STRINGS = {"", "none", "null", "nan"}
-FIX_PREFIX = "Apply the upstream fix:"
 NO_FIX = "No change needed."
-MAX_DIFF_LINES = 40
-MAX_CVE_DESC = 600
+# Lunghezza massima di un esempio: `train.py` tronca oltre `--max-seq-length` token e qui non c'è il tokenizer, quindi si
+# stima in caratteri (≈ 3,5 per token su codice e JSON). Gli esempi oltre la stima si scartano e si contano.
+MAX_SEQ_LENGTH = 8192
+CHARS_PER_TOKEN = 3.5
+# Il repository Git e il notebook clonano i file: ognuno resta sotto questa soglia (altrimenti `train.py --train` accetta più file).
+MAX_FILE_BYTES = 50 * 1024 * 1024
 
 # --------------------------------------------------------------------------- campi PrimeVul
 def is_none(value) -> bool:
@@ -99,22 +108,17 @@ def _file_label(record: dict, name: str, lang: str) -> str:
     return f"{record.get('project') or 'unknown'}/{name}.{ext}"
 
 
-def _upstream_fix(vulnerable: str, fixed: str) -> str:
-    diff = list(difflib.unified_diff(vulnerable.splitlines(), fixed.splitlines(), lineterm="", n=1))[2:]
-    return FIX_PREFIX + "\n" + "\n".join(diff[:MAX_DIFF_LINES])
+def _reasoning(kind: str, sink: dict, file_label: str, entry: dict) -> str:
+    """Frase fissa sul sink: niente id CVE, descrizione CVE, messaggio di commit o parole-etichetta («fixed», «good»…).
 
-
-def _reasoning(kind: str, sink: dict, file_label: str, entry: dict, record: dict) -> str:
+    Il modello vedeva l'id e la descrizione del CVE nel target e li riproduceva (inventati) su codice nuovo; qui il verdetto
+    si spiega solo con ciò che il prompt mostra (la chiamata, la riga, la CWE). Patch e benigni hanno la stessa frase.
+    """
     where = f"The sink `{sink['callee']}` at line {sink['line']} of {file_label}"
     if kind == "vulnerable":
-        text = f"{where} receives unvalidated data and is vulnerable to {entry['id']} ({entry['name']})."
-        if not is_none(record.get("cve_desc")):
-            text += f" Description of {record.get('cve') or 'CVE'}: {str(record['cve_desc']).strip()[:MAX_CVE_DESC]}"
-        elif not is_none(record.get("note")):
-            text += f" Upstream fix message: {str(record['note']).strip()[:MAX_CVE_DESC]}"
-        return text
-    suffix = " (fixed version of the function)" if kind == "patched" else ""
-    return f"{where} is not exploitable for {entry['id']}{suffix}: in the analyzed code the data reaches the sink with adequate checks or bounds."
+        return f"{where} receives unvalidated data and is vulnerable to {entry['id']} ({entry['name']})."
+    return (f"{where} does not receive untrusted data: the value reaching it is constant or checked before use, "
+            f"so it is not vulnerable to {entry['id']} ({entry['name']}).")
 
 
 def _choose_sink(kb: dict, func: str, lang: str, name: str, labels: list[str], record: dict,
@@ -198,10 +202,6 @@ def build_example(record: dict, kb: dict, patched: dict, max_chars: int, sinkles
     location = {"function": sink["callee"], "file": file_label, "line": sink["line"]}
     messages = common.build_messages(entry["id"], common.render_card(entry), location, [block])
 
-    if kind == "vulnerable":
-        fix = _upstream_fix(func, counterpart) if counterpart else entry["fix_hint"]
-    else:
-        fix = NO_FIX
     finding = {
         "vulnerable": kind == "vulnerable",
         "cwe_id": entry["id"],
@@ -210,8 +210,8 @@ def build_example(record: dict, kb: dict, patched: dict, max_chars: int, sinkles
         "sink_file": file_label,
         "sink_line": sink["line"],
         "vex_status": "affected" if kind == "vulnerable" else "not_affected",
-        "reasoning": _reasoning(kind, sink, file_label, entry, record),
-        "suggested_fix": fix,
+        "reasoning": _reasoning(kind, sink, file_label, entry),
+        "suggested_fix": entry["fix_hint"] if kind == "vulnerable" else NO_FIX,
     }
     messages.append({"role": "assistant", "content": json.dumps(finding, ensure_ascii=False)})
     meta = {
@@ -333,6 +333,136 @@ def choose_indices(n: int, k: int, seed: int) -> list[int]:
     return sorted(random.Random(seed).sample(range(n), min(k, n)))
 
 
+# --------------------------------------------------------------------------- esempi con slice, lunghezza, rapporto
+def _message(example: dict, role: str) -> str:
+    return next((m.get("content") or "" for m in example["messages"] if m.get("role") == role), "")
+
+
+def _source(example: dict) -> str:
+    return str(example["meta"].get("source") or "unknown")
+
+
+def prompt_hash(example: dict) -> str:
+    """Impronta del messaggio utente (senza spazi): negli esempi con slice coincide con `meta.func_hash`."""
+    return func_hash(_message(example, "user"))
+
+
+def _graph_problem(example) -> str | None:
+    """Perché una riga di `data/graph/*.jsonl` non è un esempio di chat con metadati (None se va bene)."""
+    if not isinstance(example, dict):
+        return "non è un oggetto JSON"
+    if not isinstance(example.get("meta"), dict):
+        return "manca `meta` (un oggetto)"
+    messages = example.get("messages")
+    if not isinstance(messages, list) or not all(isinstance(m, dict) and isinstance(m.get("content"), str) for m in messages):
+        return "manca `messages` (lista di messaggi con testo)"
+    if not {"user", "assistant"} <= {m.get("role") for m in messages}:
+        return "`messages` deve avere un messaggio `user` e uno `assistant`"
+    return None
+
+
+def load_graph_examples(graph_dir: Path) -> dict[str, list[dict]]:
+    """Esempi con slice di `DIR/*_train.jsonl` e `DIR/*_val.jsonl`, per nome di file (ordine deterministico), righe vuote saltate.
+
+    Altri file della cartella (`*_report.json`, file di valutazione) non vengono letti. `ValueError` con `file:riga` se una riga
+    non è JSON o non ha `messages` + `meta`: un file di dati rotto va corretto, non saltato in silenzio.
+    """
+    out: dict[str, list[dict]] = {"train": [], "val": []}
+    for split, examples in out.items():
+        for path in sorted(Path(graph_dir).glob(f"*_{split}.jsonl")):
+            with path.open("r", encoding="utf-8") as fh:
+                for number, line in enumerate(fh, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        example = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(f"{path.name}:{number}: JSON non valido ({exc})") from exc
+                    problem = _graph_problem(example)
+                    if problem:
+                        raise ValueError(f"{path.name}:{number}: {problem}")
+                    examples.append(example)
+    return out
+
+
+def merge_graph_examples(existing: list[dict], graph: list[dict], test_prompts: set[str], forbidden: set[str]) -> tuple[list[dict], dict]:
+    """`existing` + gli esempi con slice che non sono già presenti né stanno nel test: (elenco, scartati per motivo).
+
+    Scartati come `in_test`: il prompt utente (impronta `prompt_hash`) compare nel test, oppure il loro `func_hash` è fra gli
+    hash vietati (funzioni del test). Scartati come `duplicate`: stesso prompt (o stesso `func_hash`) e stessa etichetta di un
+    esempio già raccolto. Gli esempi con slice non sono limitati da `limit_label_skew`/`limit_function_level`: il loro
+    bilanciamento lo decide chi li ha scritti.
+    """
+    seen_prompt = {(prompt_hash(e), e["meta"].get("label")) for e in existing}
+    seen_func = {(e["meta"]["func_hash"], e["meta"].get("label")) for e in existing if e["meta"].get("func_hash") is not None}
+    kept: list[dict] = []
+    removed: Counter = Counter()
+    for ex in graph:
+        meta, label, digest = ex["meta"], ex["meta"].get("label"), prompt_hash(ex)
+        fhash = meta.get("func_hash")
+        if digest in test_prompts or (fhash is not None and fhash in forbidden):
+            removed["in_test"] += 1
+        elif (digest, label) in seen_prompt or (fhash is not None and (fhash, label) in seen_func):
+            removed["duplicate"] += 1
+        else:
+            seen_prompt.add((digest, label))
+            if fhash is not None:
+                seen_func.add((fhash, label))
+            kept.append(ex)
+    return existing + kept, dict(removed)
+
+
+def max_example_chars(max_seq_length: int) -> float:
+    """Caratteri oltre i quali un esempio supera (a stima) `max_seq_length` token."""
+    return max_seq_length * CHARS_PER_TOKEN
+
+
+def drop_too_long(examples: list[dict], max_chars: float) -> tuple[list[dict], dict]:
+    """Toglie gli esempi con `len(user) + len(assistant) > max_chars` (il system prompt è costante e non conta): (rimasti, scartati per fonte)."""
+    kept: list[dict] = []
+    dropped: Counter = Counter()
+    for ex in examples:
+        if len(_message(ex, "user")) + len(_message(ex, "assistant")) > max_chars:
+            dropped[_source(ex)] += 1
+        else:
+            kept.append(ex)
+    return kept, dict(dropped)
+
+
+def trace_shares(examples: list[dict]) -> dict:
+    """Per ogni `meta.track`: quanti esempi hanno una traccia con almeno 2 blocchi (cioè dei chiamanti) e quanti mostrano il solo sink.
+
+    `sink_only_share` è la quota REALIZZATA: `choose_views` la tiene al massimo a 1 − p_callers e la riequilibra per etichetta.
+    Gli esempi senza `meta.track` (le fonti senza slice) non entrano.
+    """
+    counts: dict[str, Counter] = {}
+    for ex in examples:
+        track = ex["meta"].get("track")
+        if not track:
+            continue
+        c = counts.setdefault(str(track), Counter())
+        c["examples"] += 1
+        trace = ex["meta"].get("trace")
+        blocks = trace.get("blocks") if isinstance(trace, dict) else None
+        if isinstance(blocks, list) and len(blocks) >= 2:
+            c["multi_block"] += 1
+        if ex["meta"].get("view") == "sink_only":
+            c["sink_only"] += 1
+    return {track: {"examples": c["examples"], "multi_block": c["multi_block"], "multi_block_share": round(c["multi_block"] / c["examples"], 4),
+                    "sink_only": c["sink_only"], "sink_only_share": round(c["sink_only"] / c["examples"], 4)}
+            for track, c in sorted(counts.items())}
+
+
+def size_report(paths: list[Path], limit: int | None = None) -> tuple[dict[str, int], list[str]]:
+    """({nome file: byte}, avvisi): un avviso per ogni file più grande di `limit` (default `MAX_FILE_BYTES`)."""
+    limit = MAX_FILE_BYTES if limit is None else limit
+    sizes = {Path(p).name: Path(p).stat().st_size for p in paths}
+    warnings = [f"WARNING: {name} pesa {size:,} byte ({size / 2**20:.1f} MiB), oltre il limite di {limit:,} byte: "
+                f"è troppo grande per il repository (ridurre gli esempi o dividere il file)"
+                for name, size in sizes.items() if size > limit]
+    return sizes, warnings
+
+
 # --------------------------------------------------------------------------- I/O
 def iter_records(path: Path, limit: int | None = None) -> Iterator[dict]:
     with path.open("r", encoding="utf-8") as fh:
@@ -412,7 +542,8 @@ HF_SOURCES = {  # nome -> (file locale, repo dataset HF, file nel repo)
     "python": ("cvefixes_pyvul.parquet", "janhvi-ag/cvefixes_pyvul_merged", "data/train-00000-of-00001.parquet"),
     "juliet": ("juliet_test.csv", "LorenzH/juliet_test_suite_c_1_3", "jts_c_1_3_test.csv"),
 }
-ALL_SOURCES = ("primevul", "secvuleval", "python", "juliet", "codeql")
+ALL_SOURCES = ("primevul", "secvuleval", "python", "codeql")  # Juliet entra da `--graph-dir` (con le slice), non più da qui
+LEGACY_SOURCES = ("juliet",)  # scaricabile solo se richiesto: il CSV ha le parole-etichetta (FLAW, good, bad…) dentro il codice
 CODEQL_URL = "https://github.com/github/codeql.git"
 
 
@@ -461,6 +592,32 @@ def merge_counts(parts: list[dict]) -> dict:
     return out
 
 
+def format_report(results: dict, warnings: list[str], max_chars: float) -> list[str]:
+    """Rapporto finale (righe di testo): dimensione dei file, esempi per fonte, scartati per lunghezza, quote delle tracce nel train."""
+    lines = ["", "== rapporto finale =="]
+    lines.append("file scritti:")
+    for split, res in results.items():
+        lines.append(f"  {split}.jsonl: {res['file_bytes']:,} byte ({res['file_bytes'] / 2**20:.1f} MiB)")
+    lines += warnings
+    lines.append("esempi per fonte:")
+    for split, res in results.items():
+        counts = ", ".join(f"{source} {n}" for source, n in res["source_counts"].items()) or "nessuno"
+        lines.append(f"  {split} ({sum(res['source_counts'].values())}): {counts}")
+    lines.append(f"scartati perché più lunghi di {max_chars:,.0f} caratteri (user + assistant, ≈ {max_chars / CHARS_PER_TOKEN:,.0f} token):")
+    for split, res in results.items():
+        if split != "test":
+            dropped = ", ".join(f"{source}: {n}" for source, n in sorted(res["too_long_dropped"].items())) or "nessuno"
+            lines.append(f"  {split}: {dropped}")
+    shares = results.get("train", {}).get("trace_shares", {})
+    lines.append("esempi con slice nel train, per traccia (chiamanti = traccia con almeno 2 blocchi; solo sink = quota realizzata):")
+    for track, s in shares.items():
+        lines.append(f"  {track}: {s['examples']} esempi, con chiamanti {100 * s['multi_block_share']:.1f}% ({s['multi_block']}), "
+                     f"solo sink {100 * s['sink_only_share']:.1f}% ({s['sink_only']})")
+    if not shares:
+        lines.append("  nessuno")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", type=Path, help="PrimeVul: primevul_train.jsonl")
@@ -468,10 +625,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--test", type=Path, help="PrimeVul: primevul_test.jsonl (set non visto, usato dal benchmark)")
     ap.add_argument("--secvuleval", type=Path, help="SecVulEval (.parquet/.jsonl): C/C++ con coppie vulnerabile/corretta")
     ap.add_argument("--python-pairs", type=Path, help="CVEfixes+PyVul Python (.parquet/.jsonl): code_before/code_after")
-    ap.add_argument("--juliet", type=Path, help="Juliet C/C++ (.csv): sintetico, solo train/val (mai nel test)")
+    ap.add_argument("--juliet", type=Path, help="legacy: contiene etichette nel codice. Juliet C/C++ (.csv): sintetico, solo train/val "
+                                                "(mai nel test); per Juliet con le slice usare --graph-dir")
+    ap.add_argument("--graph-dir", type=Path, help="cartella con gli esempi con slice (*_train.jsonl, *_val.jsonl): si accodano a train e val, mai al test; "
+                                                   "i test CodeQL Python di train/val vengono sostituiti da quelli con slice")
+    ap.add_argument("--max-seq-length", type=int, default=MAX_SEQ_LENGTH,
+                    help=f"lunghezza in token di train.py: gli esempi di train/val con più di {CHARS_PER_TOKEN} caratteri per token (user + assistant) vengono scartati e contati")
     ap.add_argument("--codeql", type=Path, help="checkout dei test di sicurezza di CodeQL (cartella con python/ql/test/... e cpp/ql/test/...)")
     ap.add_argument("--download", action="store_true", help="scarica in --raw-dir le fonti scelte con --sources (≈900 MB in tutto)")
-    ap.add_argument("--sources", nargs="+", choices=ALL_SOURCES, default=list(ALL_SOURCES), help="fonti da scaricare/usare con --download")
+    ap.add_argument("--sources", nargs="+", choices=ALL_SOURCES + LEGACY_SOURCES, default=list(ALL_SOURCES), help="fonti da scaricare/usare con --download")
     ap.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
     ap.add_argument("--out-dir", type=Path, default=Path("data"))
     ap.add_argument("--val-pct", type=int, default=5, help="percentuale di validazione (per commit) dove non c'è uno split ufficiale")
@@ -500,8 +662,10 @@ def main(argv: list[str] | None = None) -> int:
                 setattr(args, flag, download_source(name, args.raw_dir))
         if "codeql" in args.sources and args.codeql is None:
             args.codeql = download_codeql(args.raw_dir)
-    if not any([args.train, args.secvuleval, args.python_pairs, args.juliet, args.codeql]):
-        ap.error("serve almeno una fonte: --train/--secvuleval/--python-pairs/--juliet/--codeql (oppure --download)")
+    if args.graph_dir is not None and not args.graph_dir.is_dir():
+        ap.error(f"--graph-dir: {args.graph_dir} non è una cartella")
+    if not any([args.train, args.secvuleval, args.python_pairs, args.juliet, args.codeql, args.graph_dir]):
+        ap.error("serve almeno una fonte: --train/--secvuleval/--python-pairs/--juliet/--codeql/--graph-dir (oppure --download)")
 
     kb = common.load_kb(args.kb)
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -534,10 +698,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Altre fonti: split per commit; Juliet (varianti quasi identiche dello stesso caso) non entra mai nel test
     rows_of = lambda path: sources.read_rows(path, args.limit)  # noqa: E731
+    with_graph = args.graph_dir is not None
     other = [
         ("secvuleval", args.secvuleval, lambda p: sources.secvuleval_records(rows_of(p)), args.holdout_pct),
         ("cvefixes-python", args.python_pairs, lambda p: sources.python_pair_records(rows_of(p), kb), args.holdout_pct),
-        ("codeql-tests", args.codeql, lambda p: sources.codeql_records(sources.codeql_files(p), kb), args.holdout_pct),
+        # con --graph-dir i test CodeQL Python di train/val sono quelli con slice (traccia P1): qui restano i C/C++
+        ("codeql-tests", args.codeql, lambda p: sources.codeql_records(sources.codeql_files(p), kb, skip_python=with_graph), args.holdout_pct),
         ("juliet", args.juliet, lambda p: sources.juliet_records(rows_of(p), args.juliet_per_cwe, kb), 0),
     ]
     for source, path, to_records, test_pct in other:
@@ -546,6 +712,11 @@ def main(argv: list[str] | None = None) -> int:
         buckets: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
         for rec in to_records(path):
             buckets[split_of(group_key(rec), args.seed, args.val_pct, test_pct)].append(rec)
+        if source == "codeql-tests" and with_graph:
+            # il test è il metro di paragone e la sua composizione non dipende da --graph-dir: i Python di CodeQL restano lì
+            # (stesso ordine di prima, quindi stessa scelta dei negativi) anche se in train/val li sostituisce la versione con slice
+            buckets["test"] = [r for r in sources.codeql_records(sources.codeql_files(path), kb)
+                               if split_of(group_key(r), args.seed, args.val_pct, test_pct) == "test"]
         for split, recs in buckets.items():
             ratio = test_ratio if split == "test" else args.benign_ratio
             examples, stats = process_records(recs, kb, ratio=ratio, **common_kw)
@@ -564,33 +735,69 @@ def main(argv: list[str] | None = None) -> int:
         collected[split], function_dropped[split] = limit_function_level(collected[split], args.function_share, args.seed)
         collected[split], more = limit_label_skew(collected[split], args.label_ratio, args.seed)  # il taglio dei function-level può averla spostata
         skew_dropped[split] += more
+
+    # Esempi con slice: dopo i limiti delle fonti vecchie (che non li toccano), con le stesse garanzie (nessun duplicato esatto,
+    # nulla che compaia nel test) e mai nel test
+    graph_added = {"train": 0, "val": 0, "test": 0}
+    graph_removed: dict[str, dict] = {"train": {}, "val": {}, "test": {}}
+    if with_graph:
+        graph = load_graph_examples(args.graph_dir)
+        if not any(graph.values()):
+            print(f"ATTENZIONE: {args.graph_dir} non contiene esempi in *_train.jsonl / *_val.jsonl", file=sys.stderr)
+        test_prompts = {prompt_hash(e) for e in collected["test"]}
+        for split in ("train", "val"):
+            before = len(collected[split])
+            collected[split], graph_removed[split] = merge_graph_examples(collected[split], graph[split], test_prompts, forbidden)
+            graph_added[split] = len(collected[split]) - before
+            print(f"graph/{split}: {len(graph[split])} esempi letti, {graph_added[split]} aggiunti (scartati: {graph_removed[split]})", file=sys.stderr)
+
+    # Un esempio oltre `--max-seq-length` verrebbe troncato dal training (via il JSON del verdetto, che sta in fondo): si scarta e si conta.
+    # Il test non si tocca: è il metro di paragone e non passa dal tokenizer del training.
+    max_chars = max_example_chars(args.max_seq_length)
+    too_long: dict[str, dict] = {"train": {}, "val": {}, "test": {}}
+    for split in ("train", "val"):
+        collected[split], too_long[split] = drop_too_long(collected[split], max_chars)
+
+    def kept_counts(examples: list[dict]) -> dict:
+        return {  # `.get`: gli esempi con slice non hanno `localized`
+            "kept": dict(Counter(str(e["meta"].get("kind")) for e in examples)),
+            "kept_sink_kind": dict(Counter(str(e["meta"].get("sink_kind")) for e in examples)),
+            "kept_localized": dict(Counter(str(e["meta"].get("localized")) for e in examples)),
+        }
+
+    written: dict[str, Path] = {}
     for split, examples in collected.items():
         if not examples and not per_source[split]:
             continue
         random.Random(args.seed).shuffle(examples)
-        write_jsonl(args.out_dir / f"{split}.jsonl", examples)
+        written[split] = args.out_dir / f"{split}.jsonl"
+        write_jsonl(written[split], examples)
         by_source = {}
         for source, parts in per_source[split].items():
-            mine = [e for e in examples if e["meta"]["source"] == source]
-            by_source[source] = {
-                **merge_counts(parts),
-                "kept": dict(Counter(e["meta"]["kind"] for e in mine)),
-                "kept_sink_kind": dict(Counter(e["meta"]["sink_kind"] for e in mine)),
-                "kept_localized": dict(Counter(str(e["meta"]["localized"]) for e in mine)),
-            }
+            by_source[source] = {**merge_counts(parts), **kept_counts([e for e in examples if _source(e) == source])}
+        for source in sorted({_source(e) for e in examples} - set(per_source[split])):  # senza lavoro con questo nome: esempi con slice, `pyvul`
+            by_source[source] = kept_counts([e for e in examples if _source(e) == source])
         results[split] = {
             **merge_counts([p for parts in per_source[split].values() for p in parts]),
-            "kept": dict(Counter(e["meta"]["kind"] for e in examples)),
-            "kept_sink_kind": dict(Counter(e["meta"]["sink_kind"] for e in examples)),
-            "kept_localized": dict(Counter(str(e["meta"]["localized"]) for e in examples)),
+            **kept_counts(examples),
             "duplicates_removed": removed[split],
             "function_level_dropped": function_dropped[split],
             "label_skew_dropped": skew_dropped[split],
             "by_source": by_source,
+            "source_counts": dict(sorted(Counter(_source(e) for e in examples).items())),
+            "graph_added": graph_added[split],
+            "graph_removed": graph_removed[split],
+            "too_long_dropped": too_long[split],
+            "trace_shares": trace_shares(examples),
         }
         print(f"{split}: {len(examples)} esempi {results[split]['kept']} sink={results[split]['kept_sink_kind']}", file=sys.stderr)
 
+    sizes, warnings = size_report(list(written.values()), MAX_FILE_BYTES)
+    for split, path in written.items():
+        results[split]["file_bytes"] = sizes[path.name]
+        results[split]["over_size_limit"] = sizes[path.name] > MAX_FILE_BYTES
     (args.out_dir / "stats.json").write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
+    print("\n".join(format_report(results, warnings, max_chars)), file=sys.stderr)
     return 0
 
 

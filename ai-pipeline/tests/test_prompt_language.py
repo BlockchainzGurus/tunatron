@@ -88,23 +88,15 @@ class CatalogTests(unittest.TestCase):
 class TargetTextTests(unittest.TestCase):
     def test_no_fix_is_english(self):
         self.assertEqual(prepare_data.NO_FIX, "No change needed.")
-        self.assertEqual(italian_hits(prepare_data.FIX_PREFIX), [], prepare_data.FIX_PREFIX)
+        self.assertEqual(italian_hits(prepare_data.NO_FIX), [], prepare_data.NO_FIX)
 
-    def test_generated_reasoning_is_english(self):
-        entry = next(e for e in KB["entries"] if e["id"] == "CWE-120")
+    def test_generated_reasoning_is_english_for_every_catalog_entry(self):
         sink = {"callee": "strcpy", "line": 3}
-        record = {"cve": "CVE-2020-1", "cve_desc": "Buffer overflow in copy_name", "note": "Use snprintf instead."}
-        cases = {
-            "vulnerable (cve_desc)": ("vulnerable", record),
-            "vulnerable (note)": ("vulnerable", {"note": "Use snprintf instead."}),
-            "vulnerable (bare)": ("vulnerable", {}),
-            "patched": ("patched", record),
-            "benign": ("benign", {}),
-        }
-        for name, (kind, rec) in cases.items():
-            with self.subTest(name):
-                text = prepare_data._reasoning(kind, sink, "a.c", entry, rec)
-                self.assertEqual(italian_hits(text), [], text)
+        for entry in KB["entries"]:
+            for kind in ("vulnerable", "patched", "benign"):
+                with self.subTest(entry["id"], kind=kind):
+                    text = prepare_data._reasoning(kind, sink, "a.c", entry)
+                    self.assertEqual(italian_hits(text), [], text)
 
 
 class BenchmarkPromptTests(unittest.TestCase):

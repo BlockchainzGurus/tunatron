@@ -182,6 +182,16 @@ class CodeqlTests(unittest.TestCase):
         self.assertEqual((by_name["good_copy"]["target"], by_name["good_copy"]["sink_hint"]["callee"]), (0, "strncpy"))
         self.assertEqual(by_name["bad_copy"]["lang"], "c")
 
+    def test_skip_python_drops_the_python_files_and_keeps_the_c_ones(self):
+        files = [(self.PY, CODEQL_PY), (self.C, CODEQL_C)]
+        everything = list(sources.codeql_records(files, KB))
+        self.assertEqual({r["lang"] for r in everything}, {"python", "c"})
+        self.assertEqual(everything, list(sources.codeql_records(files, KB, skip_python=False)), "il default non cambia")
+        only_c = list(sources.codeql_records(files, KB, skip_python=True))
+        self.assertEqual({r["lang"] for r in only_c}, {"c"})
+        self.assertEqual(only_c, [r for r in everything if r["lang"] == "c"], "i record C sono identici e nello stesso ordine")
+        self.assertEqual(list(sources.codeql_records([(self.PY, CODEQL_PY)], KB, skip_python=True)), [])
+
     def test_python2_directories_and_unknown_cwe_directories_are_skipped(self):
         self.assertEqual(self.records("python/ql/test/query-tests/Security/CWE-078-CommandInjection-py2/a.py", CODEQL_PY), [])
         self.assertEqual(self.records("python/ql/test/query-tests/Security/NoCwe/a.py", CODEQL_PY), [])
