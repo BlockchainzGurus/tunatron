@@ -29,6 +29,9 @@ import prepare_data
 
 VARIANT_KINDS = ("bad", "g2b", "b2g", "good")
 VIEWS = ("callers", "sink_only")
+# Valore di `meta.track` per gli esempi Juliet (lo passa Task 6); le tracce Python passano `"py_codeql"`, `"py_synth"`,
+# `"py_pyvul"`. Solo in Juliet un sink `g2b`/`good` ha lo stesso corpo del gemello `bad` (vedi `make_candidates`).
+JULIET_TRACK = "juliet"
 NO_FIX = prepare_data.NO_FIX
 
 # --------------------------------------------------------------------------- vocabolario chiuso del reasoning
@@ -284,9 +287,11 @@ def make_candidates(fulls: list[dict], kb: dict) -> list[dict]:
     La view «solo sink» si costruisce con `build_example(..., view="sink_only")` dalla stessa traccia, con etichetta,
     variante, origine e meta dell'esempio completo. È None quando la resa solo-sink della sua traccia compare fra i
     `fulls` con entrambe le etichette (i gemelli: lì decidono i chiamanti), e quando la traccia non ha chiamanti (la
-    slice completa È già il solo sink, e un doppione con `view="sink_only"` sarebbe solo rumore). È None anche per
-    `variant_kind` `g2b` e `good` con chiamanti: in Juliet il loro sink ha lo stesso corpo del gemello `bad`, quindi il
-    solo sink non è decidibile anche quando il gemello manca dai dati.
+    slice completa È già il solo sink, e un doppione con `view="sink_only"` sarebbe solo rumore). Solo per
+    `meta.track == JULIET_TRACK` è None anche per `variant_kind` `g2b` e `good` con chiamanti: in Juliet il loro sink ha
+    lo stesso corpo del gemello `bad`, quindi il solo sink non è decidibile anche quando il gemello manca dai dati. Le
+    altre tracce (o `track` assente) seguono solo la regola dei conflitti: fuori da Juliet ogni sicuro è `good` e il suo
+    solo sink può essere decidibile (per esempio un argomento costante).
     """
     keys = [_sha(_user_content(messages_from_trace(ex["meta"]["trace"], kb, sink_only=True))) for ex in fulls]
     labels: dict[str, set[int]] = defaultdict(set)
@@ -298,7 +303,8 @@ def make_candidates(fulls: list[dict], kb: dict) -> list[dict]:
         trace = meta["trace"]
         alone = None
         has_callers = any(b["depth"] > 0 for b in trace["blocks"])
-        if len(labels[key]) == 1 and has_callers and meta["variant_kind"] not in ("g2b", "good"):
+        juliet_twin_body = meta.get("track") == JULIET_TRACK and meta["variant_kind"] in ("g2b", "good")
+        if len(labels[key]) == 1 and has_callers and not juliet_twin_body:
             alone = build_example(
                 {"sink": trace["sink"], "blocks": trace["blocks"], "truncated": False}, kb,
                 label=meta["label"], variant_kind=meta["variant_kind"], origin=meta["origin"],

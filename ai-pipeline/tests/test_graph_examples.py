@@ -14,6 +14,7 @@ from graph_examples import (
     G2B_FALLBACK,
     G2B_ORIGINS,
     GENERIC,
+    JULIET_TRACK,
     NEUTRAL_FALLBACK,
     NEUTRAL_ORIGINS,
     ORIGIN_FALLBACK,
@@ -38,7 +39,7 @@ from juliet_graph import JULIET_CWES
 KB = common.load_kb()
 ENTRY = {e["id"]: e for e in KB["entries"]}
 HEADER_RE = re.compile(r"^### .*profondità \d+\)$", re.M)
-META = {"source": "juliet-graph", "synthetic": False, "track": "J", "group": "CWE78_x_54", "variant": "54"}
+META = {"source": "juliet-graph", "synthetic": False, "track": "juliet","group": "CWE78_x_54", "variant": "54"}
 
 # Sink gemello: lo stesso corpo nella catena vulnerabile e in quella sicura; decide solo il chiamante.
 SINK_CODE = "void fn_e0e0e0(char * data)\n{\n    if (system(data) != 0)\n    {\n        exit(1);\n    }\n}"
@@ -329,14 +330,48 @@ class ConflictAndViewTests(unittest.TestCase):
         self.assertIsNone(make_candidates([single], KB)[0]["sink_only"])
 
     def test_make_candidates_gives_no_sink_only_view_to_g2b_or_good_with_callers(self):
-        g2b = example(record(GOOD_CALLER), 0, "g2b")
-        good = example(record(GOOD_CALLER, OTHER_SINK), 0, "good")
-        b2g = example(record(BAD_CALLER, OTHER_SINK), 0, "b2g")
+        juliet = {**META, "track": JULIET_TRACK}
+        g2b = example(record(GOOD_CALLER), 0, "g2b", meta=juliet)
+        good = example(record(GOOD_CALLER, OTHER_SINK), 0, "good", meta=juliet)
+        b2g = example(record(BAD_CALLER, OTHER_SINK), 0, "b2g", meta=juliet)
         cands = make_candidates([g2b, good, b2g], KB)
         self.assertIsNone(cands[0]["sink_only"])
         self.assertIsNone(cands[1]["sink_only"])
         self.assertIsNotNone(cands[2]["sink_only"])
         self.assertEqual(cands[2]["sink_only"]["meta"]["variant_kind"], "b2g")
+
+    def test_g2b_good_rule_applies_only_to_juliet(self):
+        self.assertEqual(JULIET_TRACK, "juliet")
+        rec = record(GOOD_CALLER, OTHER_SINK)
+        python = example(rec, 0, "good", meta={**META, "track": "py_codeql"})
+        alone = make_candidates([python], KB)[0]["sink_only"]
+        self.assertIsNotNone(alone)
+        self.assertEqual((alone["meta"]["track"], alone["meta"]["variant_kind"]), ("py_codeql", "good"))
+        no_track = example(rec, 0, "good", meta={k: v for k, v in META.items() if k != "track"})
+        self.assertIsNotNone(make_candidates([no_track], KB)[0]["sink_only"])
+        for kind in ("g2b", "good"):
+            juliet = example(rec, 0, kind, meta={**META, "track": JULIET_TRACK})
+            self.assertIsNone(make_candidates([juliet], KB)[0]["sink_only"], kind)
+
+    def test_python_tracks_keep_sink_only_picks_of_both_labels(self):
+        fulls = []
+        for i in range(60):
+            label = i % 2
+            sink_code = f"def fn_c1c1c1(url):\n    target = url + '{i}'\n    return redirect(target)"
+            caller = "def fn_b1b1b1(request):\n    return fn_c1c1c1(request.GET['next'])"
+            blocks = [block("fn_b1b1b1", 1, caller, 10, "python", "src/9f8e7d6c.py"),
+                      block("fn_c1c1c1", 0, sink_code, 20, "python", "src/9f8e7d6c.py")]
+            rec = {"sink": {"function": "redirect", "file": "src/9f8e7d6c.py", "line": 22, "cwe_id": "CWE-601"},
+                   "blocks": blocks, "truncated": False}
+            fulls.append(example(rec, label, "bad" if label else "good", None,
+                                 meta={**META, "track": "py_codeql", "group": f"q{i}"}))
+        cands = make_candidates(fulls, KB)
+        self.assertTrue(all(c["sink_only"] is not None for c in cands))
+        chosen = choose_views(cands, seed=42)
+        labels = [c["meta"]["label"] for c, cand in zip(chosen, cands) if c is cand["sink_only"]]
+        self.assertGreater(labels.count(0), 1)
+        self.assertGreater(labels.count(1), 1)
+        self.assertLessEqual(abs(labels.count(1) - labels.count(0)), 1)
 
 
 class PairTests(unittest.TestCase):
