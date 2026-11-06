@@ -201,8 +201,9 @@ class AnonymizeSliceTests(unittest.TestCase):
         renamed = re.search(r"char (v_[0-9a-f]{6})\[100\] = FULL_COMMAND;", out)
         self.assertIsNotNone(renamed, out)
         self.assertIn(f"data = {renamed.group(1)};", out)
-        for kept in ("globalReturnsTrue()", "strlen(data)", "static void", "char * data;", "if ("):
+        for kept in ("globalReturnsTrue()", "strlen(data)", "char * data;", "if ("):
             self.assertIn(kept, out)
+        self.assertRegex(out, r"^void fn_[0-9a-f]{6}\(\)", "la `static` della definizione si toglie")
 
     def test_nothing_is_renamed_inside_literals(self):
         code = "void data(char *d)\n{\n    printLine(\"data\");\n    char c = 'x';\n    system(d);\n}"
@@ -314,6 +315,18 @@ class CanonicalRenamingTests(unittest.TestCase):
         out = anonymize_slice(rec("alpha", "beta"), "s", MACROS)
         self.assertEqual(out["blocks"][1]["name"], "fn_" + c_anonymize._digest("s", "fn:0:0")[:6])
         self.assertEqual(out["blocks"][0]["name"], "fn_" + c_anonymize._digest("s", "fn:1:0")[:6])
+
+    def test_static_storage_class_of_the_definition_is_dropped(self):
+        """In Juliet `bad()` è globale e `goodG2B()` è `static`: la parola chiave direbbe l'etichetta (Task 6)."""
+        body = "void f(char * data)\n{\n    static int calls = 0;\n    system(data);\n}"
+        plain = anonymize_slice(block(body), "s", MACROS)
+        for variant in ("static " + body, "static\t" + body, "/* goodG2B uses the GoodSource */\nstatic " + body):
+            self.assertEqual(anonymize_slice(block(variant), "s", MACROS), plain, variant)
+        code = plain["blocks"][0]["code"]
+        self.assertTrue(code.startswith("void fn_"), code)
+        self.assertIn("static int calls = 0;", code, "una `static` dentro il corpo resta")
+        self.assertIn("system(data)", sink_code_line(plain))
+        self.assertEqual(anonymize_slice(block("staticky_t " + body), "s", MACROS)["blocks"][0]["code"][:11], "staticky_t ")
 
 
 if __name__ == "__main__":

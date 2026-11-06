@@ -33,6 +33,9 @@ _TOKEN_RE = re.compile(
 )
 
 _NEUTRAL_LITERAL = {"string": '"text"', "char": "'t'"}
+# Classe di memorizzazione in testa alla definizione: in Juliet `bad()` è globale e `goodG2B()` è `static`, quindi la
+# sola parola chiave direbbe l'etichetta (misurato nel Task 6: 646 sicuri contro 21 vulnerabili nel train).
+_STATIC_DEF_RE = re.compile(r"\Astatic[ \t]+")
 
 
 def strip_comments(code: str) -> tuple[str, list[int]]:
@@ -111,6 +114,8 @@ def anonymize_slice(rec: dict, seed: str, macros: dict[str, str]) -> dict:
     corpo, righe diverse dello stesso file) danno lo stesso record:
 
     - commenti tolti; macro riscritte col nome vero (`SYSTEM` → `system`, anche nel callee del sink);
+    - la `static` in testa alla definizione di ogni blocco tolta (le `static` nel corpo restano): in Juliet `bad()` è
+      globale e `goodG2B()` statica;
     - funzione definita nel blocco di profondità `d` e rango `k` fra i blocchi di quella profondità (nell'ordine di
       `rec["blocks"]`) → `fn_<6 hex di sha256(seed:fn:d:k)>`, anche nelle chiamate;
     - l'n-esimo identificatore distinto con una parola-spia (per parti o, in C, anche per sottostringa di `LEAK_RE`, per
@@ -134,7 +139,8 @@ def anonymize_slice(rec: dict, seed: str, macros: dict[str, str]) -> dict:
 
     line_maps = []
     for b in blocks:
-        b["code"], line_map = strip_comments(b["code"])
+        code, line_map = strip_comments(b["code"])
+        b["code"] = _STATIC_DEF_RE.sub("", code, count=1)
         line_maps.append(line_map)
     old = sink["line"] - sink_block["start_line"]
     if old not in line_maps[at_sink]:
