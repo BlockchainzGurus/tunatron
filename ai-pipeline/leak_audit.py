@@ -30,6 +30,15 @@ from c_anonymize import LEAK_RE, leaky_identifier
 # Soglia del cancello sulla struttura: con etichette bilanciate il caso dà 0,5.
 STRUCTURE_LIMIT = 0.65
 MODES = ("substring", "parts")
+SINK_MARKER = "## Candidate sink"
+# Soglia oltre la quale una caratteristica a buon mercato si segnala (senza far fallire il cancello).
+SHORTCUT_LIMIT = 0.65
+STUMP_FEATURES = ("prompt_chars", "code_chars", "code_lines", "braces", "numbers", "n_blocks", "max_depth",
+                  "sink_block_lines", "fn_tokens", "v_tokens", "text_placeholder")
+_NUMBER_RE = re.compile(r"(?<![\w.])\d[\w.]*")
+_CWE_ID_RE = re.compile(r"\bCWE-\d+\b")
+_FN_RE = re.compile(r"\bfn_[0-9a-f]{6}\b")
+_V_RE = re.compile(r"\bv_[0-9a-f]{6}\b")
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]")
 _IDENT_RE = re.compile(r"[^\W\d]\w*")
@@ -54,12 +63,33 @@ def _tokens(example: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------- parole-spia
-def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: frozenset[str] = frozenset()) -> list[str]:
-    """Parole-spia in `code`, `file`, `name` di ogni blocco di `meta.trace` (e in `file`/`function` del sink).
+def _prompt_tail(example: dict) -> str:
+    """Prompt utente reso dal marcatore `## Candidate sink` in poi (codice, intestazioni e file come li vede il modello).
 
-    `"substring"` cerca `LEAK_RE` ovunque (il C anonimizzato di Juliet non deve contenerne nemmeno dentro una parola);
-    `"parts"` controlla gli identificatori con `leaky_identifier(…, extra_parts)`, per il codice Python vero, dove
-    `prefix` o `fixture` non sono perdite. Ogni occorrenza è `"esempio <i> blocco <j> <campo>: <parola>"`.
+    La scheda della CWE sopra il marcatore è costante e resta fuori. Senza marcatore si guarda tutto il prompt.
+    """
+    user = next((m["content"] for m in example.get("messages", []) if m.get("role") == "user"), "")
+    at = user.find(SINK_MARKER)
+    return user[at:] if at >= 0 else user
+
+
+def _reasoning_text(example: dict) -> str:
+    """Il `reasoning` del target (tutto il messaggio dell'assistente se non è un JSON con quel campo)."""
+    content = next((m["content"] for m in example.get("messages", []) if m.get("role") == "assistant"), "")
+    try:
+        return str(json.loads(content)["reasoning"])
+    except (ValueError, KeyError, TypeError):
+        return content
+
+
+def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: frozenset[str] = frozenset()) -> list[str]:
+    """Parole-spia in `meta.trace`, nel prompt reso dopo `## Candidate sink` e nel `reasoning` del target.
+
+    Nella traccia si guardano `code`, `file`, `name` di ogni blocco e `file`/`function` del sink. `"substring"` cerca
+    `LEAK_RE` ovunque (il C anonimizzato di Juliet non deve contenerne nemmeno dentro una parola); `"parts"` controlla
+    gli identificatori con `leaky_identifier(…, extra_parts)`, per il codice Python vero, dove `prefix` o `fixture` non
+    sono perdite. Ogni occorrenza è `"esempio <i> <dove>: <parola>"` (`blocco <j> <campo>`, `sink <campo>`, `prompt`,
+    `reasoning`).
     """
     if mode not in MODES:
         raise ValueError(f"modo sconosciuto: {mode!r} (attesi {MODES})")
@@ -79,6 +109,9 @@ def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: f
                 scan(f"esempio {i} blocco {j} {field}", str(b[field]))
         for field in ("file", "function"):
             scan(f"esempio {i} sink {field}", str(trace["sink"][field]))
+        # L'id del catalogo (`CWE-78` nel compito) non è una perdita: in modo `parts` sarebbe la parte `cwe`.
+        scan(f"esempio {i} prompt", _CWE_ID_RE.sub(" ", _prompt_tail(ex)))
+        scan(f"esempio {i} reasoning", _CWE_ID_RE.sub(" ", _reasoning_text(ex)))
     return hits
 
 
@@ -178,6 +211,79 @@ def structure_table(examples: list[dict]) -> dict[str, dict[str, int]]:
     return {str(n): {"0": table[n][0], "1": table[n][1]} for n in sorted(table)}
 
 
+# --------------------------------------------------------------------------- scorciatoie a buon mercato
+def cheap_features(example: dict) -> dict[str, int]:
+    """Caratteristiche che non richiedono di capire il codice, sui blocchi mostrati (e sul prompt reso).
+
+    `prompt_chars` è la lunghezza del messaggio utente; `code_chars`, `code_lines`, `braces` (`{`), `numbers`
+    (letterali numerici), `fn_tokens`/`v_tokens` (nomi anonimi) e `text_placeholder` (presenza di `"text"`) contano sul
+    codice mostrato; `n_blocks`/`max_depth` sono la forma; `sink_block_lines` le righe del blocco a profondità 0.
+    """
+    blocks = shown_blocks(example)
+    code = "\n".join(b["code"] for b in blocks)
+    user = next((m["content"] for m in example.get("messages", []) if m.get("role") == "user"), "")
+    sink = next((b for b in blocks if b["depth"] == 0), blocks[0] if blocks else {"code": ""})
+    return {
+        "prompt_chars": len(user),
+        "code_chars": sum(len(b["code"]) for b in blocks),
+        "code_lines": sum(b["code"].count("\n") + 1 for b in blocks),
+        "braces": code.count("{"),
+        "numbers": len(_NUMBER_RE.findall(code)),
+        "n_blocks": len(blocks),
+        "max_depth": max((b["depth"] for b in blocks), default=0),
+        "sink_block_lines": sink["code"].count("\n") + 1,
+        "fn_tokens": len(_FN_RE.findall(code)),
+        "v_tokens": len(_V_RE.findall(code)),
+        "text_placeholder": int('"text"' in code),
+    }
+
+
+def _fit_stump(values: list[int], labels: list[int]) -> tuple[float, int]:
+    """Soglia e verso migliori sul train: si predice 1 se `x > soglia` (verso +1) o se `x <= soglia` (verso −1).
+
+    A parità vince la soglia più bassa e poi il verso +1: la scelta è deterministica.
+    """
+    pos_total = sum(labels)
+    n = len(labels)
+    order = sorted(set(values))
+    by_value = Counter()
+    pos_by_value = Counter()
+    for x, y in zip(values, labels):
+        by_value[x] += 1
+        pos_by_value[x] += y
+    best = (-1.0, float("-inf"), 1)
+    seen = seen_pos = 0  # esempi (e positivi) con x <= soglia
+    for t in [float("-inf"), *order]:
+        if t != float("-inf"):
+            seen += by_value[t]
+            seen_pos += pos_by_value[t]
+        right_plus = (pos_total - seen_pos) + (seen - seen_pos)  # positivi sopra + negativi sotto
+        for acc, direction in ((right_plus / n, 1), ((n - right_plus) / n, -1)):
+            if acc > best[0]:
+                best = (acc, t, direction)
+    return best[1], best[2]
+
+
+def stump_accuracies(train: list[dict], heldout: list[dict]) -> dict[str, float]:
+    """Per ogni caratteristica di `STUMP_FEATURES`: accuratezza su `heldout` della soglia migliore imparata su `train`.
+
+    Misura quanto una scorciatoia (per esempio «più lungo ⇒ vulnerabile») predice l'etichetta. 0.0 se uno dei due
+    insiemi è vuoto.
+    """
+    if not train or not heldout:
+        return {name: 0.0 for name in STUMP_FEATURES}
+    tr = [cheap_features(ex) for ex in train]
+    he = [cheap_features(ex) for ex in heldout]
+    y_tr = [ex["meta"]["label"] for ex in train]
+    y_he = [ex["meta"]["label"] for ex in heldout]
+    out = {}
+    for name in STUMP_FEATURES:
+        t, direction = _fit_stump([f[name] for f in tr], y_tr)
+        guesses = [int((f[name] > t) == (direction == 1)) for f in he]
+        out[name] = round(sum(g == y for g, y in zip(guesses, y_he)) / len(he), 4)
+    return out
+
+
 # --------------------------------------------------------------------------- CLI
 def read_jsonl(path: Path) -> list[dict]:
     with Path(path).open(encoding="utf-8") as f:
@@ -187,34 +293,42 @@ def read_jsonl(path: Path) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", type=Path, required=True)
-    ap.add_argument("--heldout", type=Path, required=True)
+    ap.add_argument("--heldout", type=Path, required=True, nargs="+", help="uno o più file tenuti fuori")
     ap.add_argument("--mode", choices=MODES, default="substring", help="parts per il codice Python vero")
     ap.add_argument("-k", type=int, default=30, help="quanti token stampare")
     args = ap.parse_args(argv)
 
-    train, heldout = read_jsonl(args.train), read_jsonl(args.heldout)
-    hits = forbidden_hits(train + heldout, mode=args.mode)
-    print(f"esempi: train {len(train)}, heldout {len(heldout)}")
+    train = read_jsonl(args.train)
+    heldouts = {path: read_jsonl(path) for path in args.heldout}
+    hits = forbidden_hits(train + [ex for exs in heldouts.values() for ex in exs], mode=args.mode)
+    print(f"esempi: train {len(train)}, " + ", ".join(f"{p} {len(exs)}" for p, exs in heldouts.items()))
     print(f"forbidden_hits: {len(hits)}")
     for h in hits[:50]:
         print(f"  {h}")
     print(f"top_tokens (train, k={args.k}): token, log-odds (>0 = vulnerabili), n_vulnerabili, n_sicuri")
     for token, lo, n1, n0 in top_tokens(train, args.k):
         print(f"  {token!r:24} {lo:+8.3f} {n1:6d} {n0:6d}")
-    bow = bow_accuracy(train, heldout)
-    structure = structure_accuracy(train, heldout)
-    print(f"bow_accuracy: {bow:.4f}")
-    print(f"structure_accuracy: {structure:.4f} (soglia {STRUCTURE_LIMIT})")
     print(f"structure_table (train): {json.dumps(structure_table(train))}")
-    print(f"structure_table (heldout): {json.dumps(structure_table(heldout))}")
 
     failed = False
+    for path, heldout in heldouts.items():
+        bow = bow_accuracy(train, heldout)
+        structure = structure_accuracy(train, heldout)
+        print(f"== heldout {path}")
+        print(f"bow_accuracy: {bow:.4f}")
+        print(f"structure_accuracy: {structure:.4f} (soglia {STRUCTURE_LIMIT})")
+        print(f"structure_table (heldout): {json.dumps(structure_table(heldout))}")
+        stumps = stump_accuracies(train, heldout)
+        print("stump_accuracies: " + ", ".join(f"{name} {acc:.4f}" for name, acc in stumps.items()))
+        for name, acc in stumps.items():
+            if acc >= SHORTCUT_LIMIT:
+                print(f"SHORTCUT WARNING: {name} {acc:.4f} ({path})")
+        if structure >= STRUCTURE_LIMIT:
+            print(f"PERDITA: la sola struttura (blocchi, profondità) predice l'etichetta su {path}: "
+                  f"structure_accuracy {structure:.4f} >= {STRUCTURE_LIMIT}", file=sys.stderr)
+            failed = True
     if hits:
-        print(f"PERDITA: {len(hits)} parole-spia nei blocchi (vedi sopra)", file=sys.stderr)
-        failed = True
-    if structure >= STRUCTURE_LIMIT:
-        print(f"PERDITA: la sola struttura (blocchi, profondità) predice l'etichetta: structure_accuracy "
-              f"{structure:.4f} >= {STRUCTURE_LIMIT}", file=sys.stderr)
+        print(f"PERDITA: {len(hits)} parole-spia (vedi sopra)", file=sys.stderr)
         failed = True
     return 1 if failed else 0
 

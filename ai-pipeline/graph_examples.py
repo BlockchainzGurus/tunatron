@@ -43,11 +43,17 @@ PHRASES: dict[tuple[str, str], str] = {
     ("CWE-78", "g2b"): "the command cannot be influenced from outside, so executing it is not exploitable",
     ("CWE-78", "b2g"): "the value is validated before use, so it cannot inject shell commands",
     ("CWE-78", "good"): "on the path to the sink the command contains no externally controllable data",
-    ("CWE-120", "bad"): "the copy happens without checking that sizes and offsets stay inside the buffers, so it can read or write out of bounds",
-    ("CWE-120", "g2b"): "the sizes involved are compatible with the buffers, so the copy stays in bounds",
-    ("CWE-120", "b2g"): "the size is compared with the buffer capacity before the copy, so the copy stays in bounds",
+    # Vale anche per CWE-170 (sotto CWE-126): la copia sta nei limiti ma lascia il buffer senza terminatore.
+    ("CWE-120", "bad"): "sizes, offsets or string termination around the copy are not kept inside the buffers, so the "
+                        "copy or a later read of the buffer can go out of bounds",
+    ("CWE-120", "g2b"): "the sizes and positions involved are compatible with the buffers, so the copy stays in bounds",
+    # In Juliet il b2g di CWE-120 è lo stile CWE-135: destinazione dimensionata con `wcslen` del dato, nessun confronto.
+    ("CWE-120", "b2g"): "the size used for the copy is derived from the data's own length or checked against the buffer "
+                        "capacity before use, so the copy stays within bounds",
     ("CWE-120", "good"): "on the path to the sink the copy stays within the buffer bounds",
-    ("CWE-190", "bad"): "the value reaches the sink without a range check, so the computation can overflow or change sign",
+    # CWE-194/195 hanno `if (data < 100)`: un controllo c'è, ma non esclude i negativi; CWE-680 non ne ha.
+    ("CWE-190", "bad"): "the value reaches the sink without a check that rules out negative or too large values, so the "
+                        "size computation can overflow or change sign",
     ("CWE-190", "g2b"): "the value is small enough to stay within the range of the type, so the computation does not overflow",
     ("CWE-190", "b2g"): "the value is compared with a limit before use, so the computation stays within the range of the type",
     ("CWE-190", "good"): "on the path to the sink the computation stays within the range of the type",
@@ -86,7 +92,8 @@ ORIGIN_FALLBACK = "the data comes from an external source"
 # Variante `g2b`: la sorgente è quella buona (una costante), anche se il nome del file dice `environment`.
 G2B_ORIGINS: dict[str, str] = {
     "CWE-78": "the command is built only from constant strings in the code",
-    "CWE-120": "the sizes of the copied data are hard-coded",
+    # Vale anche per CWE-124/127 (conta dove punta il dato) e CWE-135 (destinazione dimensionata sulla stringa costante).
+    "CWE-120": "the data copied is constant in the code and the buffers involved are sized and positioned for it",
     "CWE-190": "the value is a small constant in the code",
     "CWE-416": "the pointer refers to memory that was just allocated and not yet released",
 }

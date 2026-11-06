@@ -216,6 +216,26 @@ class BuildExampleTests(unittest.TestCase):
     def test_generic_sink_only_reasoning_makes_no_claim_about_unseen_blocks(self):
         self.assert_sink_only_claims_nothing_unseen(chain(3, "CWE-601", "redirect", "python"), "CWE-601", "redirect")
 
+    def test_phrases_are_true_for_the_juliet_fix_styles(self):
+        """F3: frasi verificate su esempi veri (Task 6, fix round 1)."""
+        # CWE-120 b2g in Juliet è lo stile CWE-135: la destinazione è dimensionata con `wcslen` del dato, nessun confronto.
+        b2g = PHRASES[("CWE-120", "b2g")]
+        self.assertIn("derived from the data's own length", b2g)
+        self.assertIn("checked against the buffer capacity", b2g)
+        self.assertNotIn("is compared with the buffer capacity before the copy", b2g)
+        # CWE-124/127 (underwrite/underread): conta anche dove punta il dato, non solo la dimensione.
+        self.assertIn("positions", PHRASES[("CWE-120", "g2b")])
+        self.assertIn("sized and positioned", G2B_ORIGINS["CWE-120"])
+        self.assertNotIn("hard-coded", G2B_ORIGINS["CWE-120"])
+        # CWE-170 (sotto CWE-126): la copia sta nei limiti, ma senza terminatore la lettura successiva esce dal buffer.
+        bad120 = PHRASES[("CWE-120", "bad")]
+        self.assertIn("termination", bad120)
+        self.assertIn("a later read", bad120)
+        # CWE-194/195 hanno `if (data < 100)`: un controllo c'è, ma non esclude i negativi.
+        bad190 = PHRASES[("CWE-190", "bad")]
+        self.assertIn("negative or too large", bad190)
+        self.assertNotIn("without a range check", bad190)
+
     def test_single_block_slice_states_the_origin_in_the_block(self):
         """R15: senza chiamanti la sorgente sta nel blocco: si dice da dove viene, non che non si vede."""
         code = 'void fn_e0e0e0(void)\n{\n    char * data = getenv("ADD");\n    system(data);\n}'

@@ -58,6 +58,7 @@ SAMPLE = 20
 CODE_MACROS = {**juliet_graph.MACROS, "COMMAND_ARG3": "data"}
 
 _ENGINE_SKIP_RE = re.compile(r"fuori da ogni funzione")
+_SOURCE_CALL_RE = re.compile(r"\b([A-Za-z_]\w*Source)\s*\(")
 
 
 # --------------------------------------------------------------------------- impalcatura di Juliet
@@ -85,6 +86,21 @@ def strip_harness(rec: dict) -> tuple[dict, int, int]:
 
 
 # --------------------------------------------------------------------------- record → esempi
+def source_in_callee(rec: dict) -> bool:
+    """Vero se un blocco chiama una funzione `…Source(` che non è fra i blocchi del record (R18).
+
+    Nelle varianti di Juliet con la sorgente in un callee (`data = badSource(data)`, 21/22/42/61…) il dato nasce in una
+    funzione che la backward slice non mostra: il prompt non può sostenere l'etichetta, per nessuna delle due. Si guarda
+    il codice ORIGINALE senza commenti, sui nomi originali.
+    """
+    names = {b["name"] for b in rec["blocks"]}
+    for b in rec["blocks"]:
+        code, _ = c_anonymize.strip_comments(b["code"])
+        if any(m.group(1) not in names for m in _SOURCE_CALL_RE.finditer(code)):
+            return True
+    return False
+
+
 def _dedupe_targets(targets: list[dict]) -> list[dict]:
     seen: dict[tuple, dict] = {}
     for t in targets:
@@ -118,6 +134,10 @@ def examples_from_records(records: list[dict], targets: list[dict], kb: dict, se
             continue
         if is_harness(name):
             stats["harness_sink_dropped"] += 1
+            continue
+        if source_in_callee(rec):
+            stats["source_in_callee_dropped"] += 1
+            stats[f"source_in_callee:{juliet_graph.flow_variant(file_name)}"] += 1
             continue
         clean, dispatchers, mains = strip_harness(rec)
         stats["dispatcher_blocks_dropped"] += dispatchers
@@ -290,6 +310,24 @@ def cap_pairs(pairs: list[dict], max_examples: int, seed: int) -> list[dict]:
     return [ex for i, ex in enumerate(pairs) if i in keep]
 
 
+def pair_lengths(pairs: list[dict]) -> dict[str, int]:
+    """Lunghezze (caratteri del prompt utente) dei due membri di ogni coppia S1 (F2/R19).
+
+    `pairs_different_length`: coppie con lunghezze diverse; `pairs_vulnerable_longer`: coppie col vulnerabile più lungo;
+    `pairs_length_within_15pct`: coppie la cui differenza è al più il 15% del prompt più lungo.
+    """
+    members: dict[str, dict[int, int]] = defaultdict(dict)
+    for ex in pairs:
+        user = next(m["content"] for m in ex["messages"] if m["role"] == "user")
+        members[ex["meta"]["pair_id"]][ex["meta"]["label"]] = len(user)
+    whole = [m for m in members.values() if set(m) == {0, 1}]
+    return {
+        "pairs_different_length": sum(m[0] != m[1] for m in whole),
+        "pairs_vulnerable_longer": sum(m[1] > m[0] for m in whole),
+        "pairs_length_within_15pct": sum(abs(m[1] - m[0]) <= 0.15 * max(m[0], m[1]) for m in whole),
+    }
+
+
 def sink_only_share(examples: list[dict]) -> dict:
     """Quota di esempi con la view `sink_only`: in tutto, per etichetta e per traccia."""
     def share(exs: list[dict]) -> float:
@@ -431,6 +469,11 @@ def build_juliet(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
         "conflicts_dropped": conflicts,
         "examples_after_conflicts": len(kept),
         "undecidable_share": round(conflicts / len(fulls), 4) if fulls else 0.0,
+        "source_in_callee_dropped": stats["source_in_callee_dropped"],
+        "source_in_callee_by_variant": {k.split(":", 1)[1]: v for k, v in sorted(stats.items())
+                                        if isinstance(k, str) and k.startswith("source_in_callee:")},
+        "undecidable_or_callee_share": round((stats["source_in_callee_dropped"] + conflicts) / stats["targets"], 4)
+        if stats["targets"] else 0.0,
         "conflicts_by_variant": by_variant(fulls, kept),
         "testcases_with_targets": len(targets_by_group),
         "testcases_without_examples": len(without),
@@ -462,6 +505,7 @@ def build_juliet(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
         "pairs": len(pairs) // 2,
         "pairs_available": len(all_pairs) // 2,
         "pairs_cap": "coppie intere, scelte fra tutti gli esempi completi di test e varianti tenute fuori",
+        **pair_lengths(pairs),
         "sink_only_share": sink_only_share(written["train"]),
         "sink_only_share_val": sink_only_share(written["val"]),
         "sink_only_share_train_before_cap": sink_only_share(train_all),
@@ -473,6 +517,9 @@ def build_juliet(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
             leak_audit.structure_accuracy(written["train"], written["unseen_variants"]), 4),
         "structure_table": leak_audit.structure_table(written["train"]),
         "structure_table_test": leak_audit.structure_table(written["test"]),
+        "stump_accuracies": {name: leak_audit.stump_accuracies(written["train"], exs)
+                             for name, exs in (("test", written["test"]), ("unseen_variants", written["unseen_variants"]),
+                                               ("pairs", pairs))},
         "top_tokens": [list(t) for t in leak_audit.top_tokens(written["train"], 30)],
         "seconds": round(time.monotonic() - started, 1),
     }

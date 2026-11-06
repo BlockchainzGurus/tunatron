@@ -403,7 +403,9 @@ class JulietTrackTests(unittest.TestCase):
         for key in ("bow_accuracy", "structure_accuracy", "structure_table", "top_tokens", "sink_only_share",
                     "per_cwe", "per_cwe_kind_split", "held_out_variants", "val_pct", "test_pct",
                     "dispatcher_blocks_dropped", "main_blocks_dropped", "candidates", "multi_block_share",
-                    "train_twin_sets", "holdout_strata", "unseen_variants_blocks"):
+                    "train_twin_sets", "holdout_strata", "unseen_variants_blocks", "source_in_callee_dropped",
+                    "source_in_callee_by_variant", "undecidable_or_callee_share", "stump_accuracies",
+                    "pairs_different_length", "pairs_vulnerable_longer", "pairs_length_within_15pct"):
             self.assertIn(key, report)
 
     def test_all_conflict_testcase_produces_no_examples(self):
@@ -597,6 +599,58 @@ class StratifiedHoldoutTests(unittest.TestCase):
         self.assertEqual(len(held & set(strata["single"])), 1)
 
 
+class SourceInCalleeTests(unittest.TestCase):
+    """F1/R18: una sorgente chiamata ma non mostrata (`data = badSource(data)`) rende il record non decidibile."""
+
+    P42 = "CWE78_OS_Command_Injection__char_environment_system_42"
+    P61 = "CWE415_Double_Free__malloc_free_char_61"
+
+    def rec(self, blocks: list[tuple[str, str, int, str]], sink_line: int, callee: str, cwe: str) -> tuple[dict, dict]:
+        """(record, target) da blocchi (file, nome, profondità, codice); ogni blocco parte dalla riga 10."""
+        out = [{"file": f, "name": n, "start_line": 10, "end_line": 10 + c.count("\n"), "depth": d, "lang": "c", "code": c}
+               for f, n, d, c in blocks]
+        depth0 = next(b for b in out if b["depth"] == 0)
+        target = {"file": depth0["file"], "line": sink_line, "callee": callee, "cwe_id": cwe}
+        return {"sink": {"function": callee, "file": depth0["file"], "line": sink_line, "cwe_id": cwe},
+                "blocks": out, "truncated": False}, target
+
+    def calling_source(self, kind: str) -> tuple[dict, dict]:
+        holder = f"{self.P42}_bad" if kind == "bad" else "goodG2B"
+        source = "badSource" if kind == "bad" else "goodG2BSource"
+        code = (f"void {holder}()\n{{\n    char * data;\n    char data_buf[100] = FULL_COMMAND;\n    data = data_buf;\n"
+                f"    data = {source}(data);\n    SYSTEM(data);\n}}")
+        return self.rec([(f"s01/{self.P42}.c", holder, 0, code)], 16, "system", "CWE-78")
+
+    def test_records_calling_a_source_that_is_not_shown_are_dropped_for_both_labels(self):
+        stats = Counter()
+        pairs = [self.calling_source("bad"), self.calling_source("good")]
+        out = build_graph_data.examples_from_records([r for r, _ in pairs], [t for _, t in pairs], KB, 42, stats)
+        self.assertEqual(out, [])
+        self.assertEqual(stats["source_in_callee_dropped"], 2)
+        self.assertEqual(stats["source_in_callee:42"], 2)
+
+    def test_the_block_defining_the_source_is_kept(self):
+        source = (f"char * {self.P61}b_badSource(char * data)\n{{\n    data = (char *)malloc(100*sizeof(char));\n"
+                  "    if (data == NULL) {exit(-1);}\n    free(data);\n    return data;\n}")
+        caller = (f"void {self.P61}_bad()\n{{\n    char * data;\n    data = NULL;\n"
+                  f"    data = {self.P61}b_badSource(data);\n    free(data);\n}}")
+        rec, target = self.rec([(f"s01/{self.P61}a.c", f"{self.P61}_bad", 1, caller),
+                                (f"s01/{self.P61}b.c", f"{self.P61}b_badSource", 0, source)], 14, "free", "CWE-416")
+        stats = Counter()
+        out = build_graph_data.examples_from_records([rec], [target], KB, 42, stats)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(stats["source_in_callee_dropped"], 0)
+
+    def test_library_input_calls_are_untouched(self):
+        code = (f"void {self.P42.replace('_42', '_01')}_bad()\n{{\n    char data[100] = \"\";\n"
+                "    fgets(data, 100, stdin);\n    SYSTEM(data);\n}")
+        rec, target = self.rec([(f"s01/{self.P42.replace('_42', '_01')}.c", f"{self.P42.replace('_42', '_01')}_bad", 0,
+                                 code)], 14, "system", "CWE-78")
+        stats = Counter()
+        self.assertEqual(len(build_graph_data.examples_from_records([rec], [target], KB, 42, stats)), 1)
+        self.assertEqual(stats["source_in_callee_dropped"], 0)
+
+
 class CapPairsTests(unittest.TestCase):
     def test_cap_pairs_keeps_whole_pairs_in_input_order(self):
         pairs = [{"meta": {"pair_id": f"p{i // 2}", "cwe": "CWE-78", "variant": str(50 + i // 4), "label": i % 2}}
@@ -607,6 +661,14 @@ class CapPairsTests(unittest.TestCase):
         self.assertTrue(all(n == 2 for n in ids.values()))
         self.assertEqual(out, [ex for ex in pairs if ex["meta"]["pair_id"] in ids])
         self.assertEqual(build_graph_data.cap_pairs(pairs, 100, seed=1), pairs)
+
+    def test_pair_lengths_compare_the_two_prompts(self):
+        def ex(pid: str, label: int, n: int) -> dict:
+            return {"messages": [{"role": "user", "content": "x" * n}], "meta": {"pair_id": pid, "label": label}}
+
+        pairs = [ex("a", 1, 200), ex("a", 0, 100), ex("b", 1, 100), ex("b", 0, 110), ex("c", 1, 50), ex("c", 0, 50)]
+        self.assertEqual(build_graph_data.pair_lengths(pairs), {"pairs_different_length": 2, "pairs_vulnerable_longer": 1,
+                                                                "pairs_length_within_15pct": 2})
 
 
 if __name__ == "__main__":

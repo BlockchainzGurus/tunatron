@@ -63,6 +63,32 @@ class ForbiddenHitsTests(unittest.TestCase):
         bad = example(1, "system(data);", ["def fn_c1c1c1(bad_value):\n    return bad_value"])
         self.assertTrue(leak_audit.forbidden_hits([bad], mode="parts"))
 
+    def test_forbidden_hits_scans_trace_prompt_tail_and_reasoning(self):
+        """F4: la parola-spia si trova in ciascuno dei tre posti; la scheda prima di `## Candidate sink` non conta."""
+        clean = example(1, "system(data);")
+        self.assertEqual(leak_audit.forbidden_hits([clean]), [])
+
+        in_trace = example(1, "system(data);")
+        in_trace["meta"]["trace"]["blocks"][0]["code"] += "\n/* goodG2B */"
+        self.assertTrue(any("goodG2B" in h and "blocco" in h for h in leak_audit.forbidden_hits([in_trace])))
+
+        in_prompt = example(1, "system(data);")
+        user = in_prompt["messages"][1]
+        user["content"] = user["content"].replace("## Task", "badSink here\n\n## Task")
+        hits = leak_audit.forbidden_hits([in_prompt])
+        self.assertTrue(any("badSink" in h and "prompt" in h for h in hits), hits)
+
+        in_reasoning = example(1, "system(data);")
+        finding = json.loads(in_reasoning["messages"][2]["content"])
+        finding["reasoning"] += " The benign twin differs."
+        in_reasoning["messages"][2]["content"] = json.dumps(finding)
+        hits = leak_audit.forbidden_hits([in_reasoning])
+        self.assertTrue(any("benign" in h and "reasoning" in h for h in hits), hits)
+
+        in_card = example(1, "system(data);")
+        in_card["messages"][1]["content"] = "flawed card text\n" + in_card["messages"][1]["content"]
+        self.assertEqual(leak_audit.forbidden_hits([in_card]), [])
+
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
             leak_audit.forbidden_hits([], mode="regex")
@@ -124,6 +150,43 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(leak_audit.structure_table(exs), {"1": {"0": 0, "1": 1}, "2": {"0": 2, "1": 0}})
 
 
+class StumpTests(unittest.TestCase):
+    """F2: soglie su caratteristiche a buon mercato (lunghezza, righe, …): misura delle scorciatoie."""
+
+    LONG = "char * data = getenv(\"ADD\");\n    if (data != NULL)\n    {\n        strcat(buf, data);\n    }\n    system(buf);"
+
+    def pool(self, prefix: str, n: int) -> list[dict]:
+        return [example(1, self.LONG, group=f"{prefix}v{i}") for i in range(n)] + \
+               [example(0, "system(\"ls\");", group=f"{prefix}s{i}") for i in range(n)]
+
+    def test_stump_accuracies_cover_every_feature(self):
+        acc = leak_audit.stump_accuracies(self.pool("t", 4), self.pool("h", 2))
+        self.assertEqual(set(acc), set(leak_audit.STUMP_FEATURES))
+        for name in ("prompt_chars", "code_chars", "code_lines", "sink_block_lines"):
+            self.assertEqual(acc[name], 1.0, name)
+        self.assertEqual(acc["n_blocks"], 0.5, "stessa forma per le due etichette")
+        self.assertEqual(leak_audit.stump_accuracies(self.pool("t", 2), []), {k: 0.0 for k in leak_audit.STUMP_FEATURES})
+
+    def test_stump_learns_the_direction(self):
+        flipped = [example(0, self.LONG, group=f"v{i}") for i in range(4)] + \
+                  [example(1, "system(\"ls\");", group=f"s{i}") for i in range(4)]
+        held = [example(0, self.LONG, group="hv"), example(1, "system(\"ls\");", group="hs")]
+        self.assertEqual(leak_audit.stump_accuracies(flipped, held)["code_chars"], 1.0)
+
+    def test_features_count_tokens_of_the_shown_blocks(self):
+        ex = example(1, 'v_a1b2c3 = 10; fn_d4e5f6(2); printLine("text"); system(data);',
+                     ["void fn_c1c1c1(void)\n{\n    fn_a0a0a0(data);\n}"])
+        f = leak_audit.cheap_features(ex)
+        self.assertEqual(f["n_blocks"], 2)
+        self.assertEqual(f["max_depth"], 1)
+        self.assertEqual(f["text_placeholder"], 1)
+        self.assertEqual(f["v_tokens"], 1)
+        self.assertEqual(f["fn_tokens"], 4)  # fn_c1c1c1, fn_a0a0a0 (due volte), fn_d4e5f6
+        self.assertEqual(f["numbers"], 2)
+        self.assertEqual(f["sink_block_lines"], 4)
+        self.assertEqual(f["prompt_chars"], len(ex["messages"][1]["content"]))
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, train: list[dict], heldout: list[dict]) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as d:
@@ -148,6 +211,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         for word in ("forbidden", "top_tokens", "bow_accuracy", "structure_accuracy", "structure_table"):
             self.assertIn(word, out.stdout)
+
+    def test_cli_warns_on_shortcuts_without_failing_and_reads_several_heldouts(self):
+        stumps = StumpTests()
+        with tempfile.TemporaryDirectory() as d:
+            tr, h1, h2 = Path(d) / "train.jsonl", Path(d) / "h1.jsonl", Path(d) / "h2.jsonl"
+            write_jsonl(tr, stumps.pool("t", 4))
+            write_jsonl(h1, stumps.pool("a", 2))
+            write_jsonl(h2, stumps.pool("b", 3))
+            out = subprocess.run([sys.executable, str(HERE / "leak_audit.py"), "--train", str(tr), "--heldout", str(h1),
+                                  str(h2)], capture_output=True, text=True, cwd=HERE)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        text = out.stdout + out.stderr
+        self.assertIn("SHORTCUT WARNING: prompt_chars 1.0000", text)
+        self.assertIn("h1.jsonl", text)
+        self.assertIn("h2.jsonl", text)
+        self.assertIn("stump_accuracies", text)
 
     def test_cli_exits_one_when_structure_alone_predicts_the_label(self):
         callers = ["void fn_c1c1c1(void)\n{\n    fn_a0a0a0(data);\n}"]
