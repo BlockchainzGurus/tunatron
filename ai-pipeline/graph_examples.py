@@ -97,6 +97,11 @@ NEUTRAL_ORIGINS: dict[str, str] = {
 }
 NEUTRAL_FALLBACK = "il dato arriva al sink attraverso i blocchi mostrati"
 
+# Prompt con il solo blocco a profondità 0 (view `sink_only`, o slice senza chiamanti): il reasoning afferma solo ciò che
+# il prompt mostra, quindi niente origine e niente «risale a …». Il motivo resta `PHRASES`/`GENERIC`: un esempio solo-sink
+# esiste solo se il suo prompt non è gemello di uno con l'etichetta opposta.
+SINK_ONLY_REASONING = "`{sink}` in `{fn}` (profondità 0, unico blocco mostrato): l'origine del dato non è visibile nel blocco; {reason}."
+
 # Chiavi di `meta` calcolate qui: chi chiama passa solo le altre (`source`, `synthetic`, `track`, `group`, `variant`…).
 _COMPUTED = frozenset({"label", "kind", "cwe", "lang", "sink_function", "sink_line", "sink_kind", "func_hash", "view",
                        "variant_kind", "origin", "pair_id", "trace"})
@@ -177,10 +182,15 @@ def _origin_clause(cwe_id: str, variant_kind: str, origin: str | None) -> str:
 
 
 def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, sink_function: str, shown: list[dict]) -> str:
-    """Sink, funzione del blocco mostrato più profondo (il primo, a parità) con la sua profondità, origine e motivo."""
+    """Sink, funzione del blocco mostrato più profondo (il primo, a parità) con la sua profondità, origine e motivo.
+
+    Con il solo blocco a profondità 0 nel prompt si usa `SINK_ONLY_REASONING`: nessuna affermazione su blocchi non mostrati.
+    """
     sink_block = _sink_block(shown)
-    root = max(shown, key=lambda b: b["depth"])
     reason = PHRASES.get((cwe_id, variant_kind), GENERIC[label])
+    if len(shown) == 1:
+        return SINK_ONLY_REASONING.format(sink=sink_function, fn=sink_block["name"], reason=reason)
+    root = max(shown, key=lambda b: b["depth"])
     return (f"`{sink_function}` in `{sink_block['name']}` riceve un dato che risale a `{root['name']}` "
             f"(profondità {root['depth']}): {_origin_clause(cwe_id, variant_kind, origin)}; {reason}.")
 
@@ -193,7 +203,8 @@ def build_example(rec: dict, kb: dict, *, label: int, variant_kind: str, origin:
     `"bad"` per 1 e `"good"` per 0. `origin` è il `source_token` del file (o None). `meta` porta le chiavi di chi chiama
     (`source`, `synthetic`, `track`, `group`, `variant`…), che non possono coincidere con quelle calcolate qui.
     `view="sink_only"` mostra nel prompt il solo blocco a profondità 0, ma `meta.trace` conserva sempre tutti i blocchi,
-    così i benchmark possono ricostruire ogni profondità. `ValueError` per una slice troncata, una view o una variante
+    così i benchmark possono ricostruire ogni profondità. `meta.func_hash` è l'impronta del prompt utente reso (non del
+    codice), quindi le due view dello stesso sink hanno impronte diverse. `ValueError` per una slice troncata, una view o una variante
     sconosciuta, un'etichetta incoerente o un record senza blocco a profondità 0.
     """
     if rec.get("truncated"):

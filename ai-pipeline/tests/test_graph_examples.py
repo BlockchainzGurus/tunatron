@@ -10,12 +10,15 @@ import unittest
 import common
 from c_anonymize import LEAK_RE
 from graph_examples import (
+    G2B_FALLBACK,
     G2B_ORIGINS,
     GENERIC,
+    NEUTRAL_FALLBACK,
     NEUTRAL_ORIGINS,
     ORIGIN_FALLBACK,
     ORIGINS,
     PHRASES,
+    SINK_ONLY_REASONING,
     VARIANT_KINDS,
     build_example,
     cap_balanced,
@@ -56,13 +59,13 @@ def record(caller: str = BAD_CALLER, sink_code: str = SINK_CODE, *, cwe: str = "
             "blocks": blocks, "truncated": truncated}
 
 
-def chain(n: int) -> dict:
-    """Catena di `n` blocchi `fn_a<d>` dalla profondità n-1 alla 0."""
-    blocks = [block(f"fn_a{d}a{d}a{d}", d, f"void fn_a{d}a{d}a{d}(char * data)\n{{\n    use(data);\n}}", 100 * (n - d))
-              for d in range(n - 1, -1, -1)]
-    blocks[-1]["code"] = "void fn_a0a0a0(char * data)\n{\n    system(data);\n}"
+def chain(n: int, cwe: str = "CWE-78", callee: str = "system", lang: str = "c") -> dict:
+    """Catena di `n` blocchi `fn_a<d>` dalla profondità n-1 alla 0; il blocco a profondità 0 chiama `callee`."""
+    blocks = [block(f"fn_a{d}a{d}a{d}", d, f"void fn_a{d}a{d}a{d}(char * data)\n{{\n    use(data);\n}}", 100 * (n - d),
+                    lang=lang) for d in range(n - 1, -1, -1)]
+    blocks[-1]["code"] = f"void fn_a0a0a0(char * data)\n{{\n    {callee}(data);\n}}"
     sink_line = blocks[-1]["start_line"] + 2
-    return {"sink": {"function": "system", "file": "src/0a1b2c3d.c", "line": sink_line, "cwe_id": "CWE-78"},
+    return {"sink": {"function": callee, "file": "src/0a1b2c3d.c", "line": sink_line, "cwe_id": cwe},
             "blocks": blocks, "truncated": False}
 
 
@@ -117,7 +120,7 @@ class BuildExampleTests(unittest.TestCase):
         self.assertNotIn("getenv", user(ex))
         self.assertEqual(len(ex["meta"]["trace"]["blocks"]), 2)
         self.assertEqual(ex["meta"]["view"], "sink_only")
-        self.assertIn("`fn_e0e0e0` (profondità 0)", finding(ex)["reasoning"])
+        self.assertIn("`fn_e0e0e0` (profondità 0, unico blocco mostrato)", finding(ex)["reasoning"])
         self.assertNotIn("fn_d0d0d0", finding(ex)["reasoning"])
         with self.assertRaises(ValueError):
             example(record(), 1, view="whatever")
@@ -137,7 +140,8 @@ class BuildExampleTests(unittest.TestCase):
                   "min", "negative", "large", "fixed"]
         self.assertLessEqual(set(tokens), set(ORIGINS))
         fragments = [*PHRASES.values(), *GENERIC.values(), *ORIGINS.values(), ORIGIN_FALLBACK,
-                     *G2B_ORIGINS.values(), *NEUTRAL_ORIGINS.values()]
+                     *G2B_ORIGINS.values(), G2B_FALLBACK, *NEUTRAL_ORIGINS.values(), NEUTRAL_FALLBACK,
+                     SINK_ONLY_REASONING]
         for text in fragments:
             self.assertIsNone(LEAK_RE.search(text), text)
             self.assertNotIn("CVE-", text)
@@ -165,6 +169,38 @@ class BuildExampleTests(unittest.TestCase):
             self.assertNotIn(ORIGIN_FALLBACK, missing)
         unknown = finding(example(record(), 1, "bad", "sconosciuto"))["reasoning"]
         self.assertIn(ORIGIN_FALLBACK, unknown)
+
+    ORIGIN_TEXTS = (*ORIGINS.values(), ORIGIN_FALLBACK, *G2B_ORIGINS.values(), G2B_FALLBACK, *NEUTRAL_ORIGINS.values(),
+                    NEUTRAL_FALLBACK)
+
+    def assert_sink_only_claims_nothing_unseen(self, rec: dict, cwe: str, callee: str):
+        for kind in VARIANT_KINDS:
+            for origin in (*ORIGINS, None, "sconosciuto"):
+                label = int(kind == "bad")
+                alone = example(rec, label, kind, origin, view="sink_only")
+                reasoning = finding(alone)["reasoning"]
+                for text in self.ORIGIN_TEXTS:
+                    self.assertNotIn(text, reasoning, (cwe, kind, origin))
+                self.assertNotIn("fn_a1a1a1", reasoning)
+                self.assertNotIn("fn_a2a2a2", reasoning)
+                self.assertNotIn("risale a", reasoning)
+                self.assertIn("profondità 0", reasoning)
+                self.assertIn(f"`{callee}` in `fn_a0a0a0`", reasoning)
+                self.assertIn(PHRASES.get((cwe, kind), GENERIC[label]), reasoning)
+                self.assertIsNone(LEAK_RE.search(reasoning))
+                self.assertNotIn("CVE-", reasoning)
+                self.assertEqual(common.validate_finding(finding(alone)), [])
+                # Stesso prompt, stessa etichetta: la slice senza chiamanti dà lo stesso reasoning del solo sink.
+                single = example(sink_only(rec), label, kind, origin)
+                self.assertEqual(finding(single)["reasoning"], reasoning)
+                full = finding(example(rec, label, kind, origin))["reasoning"]
+                self.assertIn("risale a `fn_a2a2a2` (profondità 2)", full)
+
+    def test_sink_only_reasoning_makes_no_claim_about_unseen_blocks(self):
+        self.assert_sink_only_claims_nothing_unseen(chain(3), "CWE-78", "system")
+
+    def test_generic_sink_only_reasoning_makes_no_claim_about_unseen_blocks(self):
+        self.assert_sink_only_claims_nothing_unseen(chain(3, "CWE-601", "redirect", "python"), "CWE-601", "redirect")
 
     def test_cwe_outside_the_table_uses_the_generic_phrase(self):
         code = "def fn_c1c1c1(url):\n    return redirect(url)"
