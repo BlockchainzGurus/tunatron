@@ -53,10 +53,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(cfg: Config) -> anyhow::Result<Engine> {
-        let kb = match &cfg.kb_path {
-            Some(path) => CweKb::load(path)?,
-            None => CweKb::embedded(),
-        };
+        let kb = CweKb::load_or_embedded(cfg.kb_path.as_deref())?;
         let client = VllmClient::new(cfg.vllm.clone())?;
         Ok(Engine { cfg, kb: Arc::new(kb), client })
     }

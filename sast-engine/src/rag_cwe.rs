@@ -44,6 +44,14 @@ impl CweKb {
         Self::from_json(&json)
     }
 
+    /// KB dal file indicato (`CWE_KB_PATH`) oppure, senza percorso, quella incorporata.
+    pub fn load_or_embedded(path: Option<&Path>) -> anyhow::Result<Self> {
+        match path {
+            Some(path) => Self::load(path),
+            None => Ok(Self::embedded()),
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<&CweEntry> {
         self.entries.iter().find(|e| e.id == id)
     }
@@ -165,5 +173,15 @@ mod tests {
         std::fs::write(&p, EMBEDDED_KB).unwrap();
         assert!(!CweKb::load(&p).unwrap().entries.is_empty());
         assert!(CweKb::load(&dir.path().join("nope.json")).is_err());
+    }
+
+    #[test]
+    fn load_or_embedded_uses_the_file_when_given_and_the_embedded_kb_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("kb.json");
+        std::fs::write(&p, r#"{"version": 7, "entries": []}"#).unwrap();
+        assert_eq!(CweKb::load_or_embedded(Some(&p)).unwrap().version, 7);
+        assert!(!CweKb::load_or_embedded(None).unwrap().entries.is_empty());
+        assert!(CweKb::load_or_embedded(Some(&dir.path().join("nope.json"))).is_err());
     }
 }

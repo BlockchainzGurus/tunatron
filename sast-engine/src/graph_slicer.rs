@@ -475,6 +475,26 @@ impl CodeGraph {
             truncated,
         }
     }
+
+    /// Registra come sink una chiamata che il catalogo non vede (es. una macro): il sink va sulla funzione
+    /// più interna di `file` (relativo alla radice, separatore `/`) che contiene `line`.
+    /// Restituisce l'indice in `self.sinks`, oppure `None` se nessuna funzione contiene la riga.
+    pub fn add_target_sink(&mut self, file: &str, line: u32, callee: &str, cwe_id: &str) -> Option<usize> {
+        let function = self
+            .graph
+            .node_indices()
+            .filter(|i| {
+                let f = &self.graph[*i];
+                Path::new(file) == f.file && (f.start_line..=f.end_line).contains(&line)
+            })
+            // La più interna è la più corta; a parità di estensione vale quella che inizia dopo.
+            .min_by_key(|i| {
+                let f = &self.graph[*i];
+                (f.end_line - f.start_line, Reverse(f.start_line))
+            })?;
+        self.sinks.push(Sink { function, callee: callee.to_string(), line, cwe_id: cwe_id.to_string() });
+        Some(self.sinks.len() - 1)
+    }
 }
 
 #[cfg(test)]
@@ -747,5 +767,24 @@ def outer():
         assert!(b.code.contains("c.execute(value_1)"));
         assert!(b.code.len() <= 1500, "len={}", b.code.len());
         assert!(b.start_line > 1 && b.start_line <= 302 && b.end_line >= 302, "{}-{}", b.start_line, b.end_line);
+    }
+
+    #[test]
+    fn add_target_sink_picks_the_innermost_function_and_rejects_other_lines() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "m.py", "X = 1\n\ndef outer():\n    def inner():\n        MACRO(x)\n    inner()\n    MACRO(y)\n");
+        let mut g = build_graph(d.path(), &CweKb::embedded(), &ScanLimits::default()).unwrap();
+        assert!(g.sinks.is_empty());
+
+        let i = g.add_target_sink("m.py", 5, "MACRO", "CWE-78").unwrap();
+        assert_eq!(g.graph[g.sinks[i].function].name, "inner");
+        let j = g.add_target_sink("m.py", 7, "MACRO", "CWE-78").unwrap();
+        assert_eq!((i, j), (0, 1));
+        assert_eq!(g.graph[g.sinks[j].function].name, "outer");
+        assert_eq!((g.sinks[j].callee.as_str(), g.sinks[j].line, g.sinks[j].cwe_id.as_str()), ("MACRO", 7, "CWE-78"));
+
+        assert_eq!(g.add_target_sink("m.py", 1, "MACRO", "CWE-78"), None, "riga globale");
+        assert_eq!(g.add_target_sink("altro.py", 5, "MACRO", "CWE-78"), None, "file sconosciuto");
+        assert_eq!(g.sinks.len(), 2);
     }
 }
