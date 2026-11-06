@@ -58,7 +58,8 @@ SAMPLE = 20
 CODE_MACROS = {**juliet_graph.MACROS, "COMMAND_ARG3": "data"}
 
 _ENGINE_SKIP_RE = re.compile(r"fuori da ogni funzione")
-_SOURCE_CALL_RE = re.compile(r"\b([A-Za-z_]\w*Source)\s*\(")
+_CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_LITERAL_RE = re.compile(r"\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'")
 
 
 # --------------------------------------------------------------------------- impalcatura di Juliet
@@ -86,19 +87,23 @@ def strip_harness(rec: dict) -> tuple[dict, int, int]:
 
 
 # --------------------------------------------------------------------------- record → esempi
-def source_in_callee(rec: dict) -> bool:
-    """Vero se un blocco chiama una funzione `…Source(` che non è fra i blocchi del record (R18).
+def hidden_callees(rec: dict) -> set[str]:
+    """Funzioni chiamate dai blocchi, non definite da nessun blocco, il cui nome ORIGINALE soddisfa `LEAK_RE` (R18/R18b).
 
-    Nelle varianti di Juliet con la sorgente in un callee (`data = badSource(data)`, 21/22/42/61…) il dato nasce in una
-    funzione che la backward slice non mostra: il prompt non può sostenere l'etichetta, per nessuna delle due. Si guarda
-    il codice ORIGINALE senza commenti, sui nomi originali.
+    Nelle varianti di Juliet con la sorgente o il secondo sink in un callee (`data = badSource(data)`,
+    `goodB2G1Sink(data)`, …) il codice che decide l'etichetta sta in una funzione che la backward slice non mostra: il
+    prompt non può sostenere l'etichetta, per nessuna delle due. Si guarda il codice originale senza commenti né
+    letterali; le funzioni di libreria o di supporto (`printLine`, `strcpy`, `globalReturnsTrueOrFalse`) non contano.
+    Il chiamante passa il record SENZA impalcatura: `main` e il dispatcher chiamano funzioni fuori dalla catena.
     """
     names = {b["name"] for b in rec["blocks"]}
+    hidden: set[str] = set()
     for b in rec["blocks"]:
         code, _ = c_anonymize.strip_comments(b["code"])
-        if any(m.group(1) not in names for m in _SOURCE_CALL_RE.finditer(code)):
-            return True
-    return False
+        code = _LITERAL_RE.sub('""', code)
+        hidden |= {m.group(1) for m in _CALL_RE.finditer(code)
+                   if m.group(1) not in names and c_anonymize.LEAK_RE.search(m.group(1))}
+    return hidden
 
 
 def _dedupe_targets(targets: list[dict]) -> list[dict]:
@@ -135,11 +140,16 @@ def examples_from_records(records: list[dict], targets: list[dict], kb: dict, se
         if is_harness(name):
             stats["harness_sink_dropped"] += 1
             continue
-        if source_in_callee(rec):
-            stats["source_in_callee_dropped"] += 1
-            stats[f"source_in_callee:{juliet_graph.flow_variant(file_name)}"] += 1
-            continue
         clean, dispatchers, mains = strip_harness(rec)
+        hidden = hidden_callees(clean)
+        if hidden:
+            variant = juliet_graph.flow_variant(file_name)
+            stats["hidden_callee_dropped"] += 1
+            stats[f"hidden_callee:{variant}"] += 1
+            if any(name.endswith("Source") for name in hidden):
+                stats["source_in_callee_dropped"] += 1
+                stats[f"source_in_callee:{variant}"] += 1
+            continue
         stats["dispatcher_blocks_dropped"] += dispatchers
         stats["main_blocks_dropped"] += mains
         group = juliet_graph.testcase_group(file_name)
@@ -314,17 +324,20 @@ def pair_lengths(pairs: list[dict]) -> dict[str, int]:
     """Lunghezze (caratteri del prompt utente) dei due membri di ogni coppia S1 (F2/R19).
 
     `pairs_different_length`: coppie con lunghezze diverse; `pairs_vulnerable_longer`: coppie col vulnerabile più lungo;
-    `pairs_length_within_15pct`: coppie la cui differenza è al più il 15% del prompt più lungo.
+    `pairs_length_within_15pct`: coppie la cui differenza è al più il 15% del prompt più lungo (comprese quelle di
+    lunghezza identica); `pairs_different_length_within_15pct`: le stesse, ma solo fra quelle di lunghezza diversa.
     """
     members: dict[str, dict[int, int]] = defaultdict(dict)
     for ex in pairs:
         user = next(m["content"] for m in ex["messages"] if m["role"] == "user")
         members[ex["meta"]["pair_id"]][ex["meta"]["label"]] = len(user)
     whole = [m for m in members.values() if set(m) == {0, 1}]
+    within = [m for m in whole if abs(m[1] - m[0]) <= 0.15 * max(m[0], m[1])]
     return {
         "pairs_different_length": sum(m[0] != m[1] for m in whole),
         "pairs_vulnerable_longer": sum(m[1] > m[0] for m in whole),
-        "pairs_length_within_15pct": sum(abs(m[1] - m[0]) <= 0.15 * max(m[0], m[1]) for m in whole),
+        "pairs_length_within_15pct": len(within),
+        "pairs_different_length_within_15pct": sum(m[0] != m[1] for m in within),
     }
 
 
@@ -472,7 +485,10 @@ def build_juliet(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
         "source_in_callee_dropped": stats["source_in_callee_dropped"],
         "source_in_callee_by_variant": {k.split(":", 1)[1]: v for k, v in sorted(stats.items())
                                         if isinstance(k, str) and k.startswith("source_in_callee:")},
-        "undecidable_or_callee_share": round((stats["source_in_callee_dropped"] + conflicts) / stats["targets"], 4)
+        "hidden_callee_dropped": stats["hidden_callee_dropped"],
+        "hidden_callee_by_variant": {k.split(":", 1)[1]: v for k, v in sorted(stats.items())
+                                     if isinstance(k, str) and k.startswith("hidden_callee:")},
+        "undecidable_or_callee_share": round((stats["hidden_callee_dropped"] + conflicts) / stats["targets"], 4)
         if stats["targets"] else 0.0,
         "conflicts_by_variant": by_variant(fulls, kept),
         "testcases_with_targets": len(targets_by_group),

@@ -405,6 +405,7 @@ class JulietTrackTests(unittest.TestCase):
                     "dispatcher_blocks_dropped", "main_blocks_dropped", "candidates", "multi_block_share",
                     "train_twin_sets", "holdout_strata", "unseen_variants_blocks", "source_in_callee_dropped",
                     "source_in_callee_by_variant", "undecidable_or_callee_share", "stump_accuracies",
+                    "hidden_callee_dropped", "hidden_callee_by_variant", "pairs_different_length_within_15pct",
                     "pairs_different_length", "pairs_vulnerable_longer", "pairs_length_within_15pct"):
             self.assertIn(key, report)
 
@@ -628,6 +629,8 @@ class SourceInCalleeTests(unittest.TestCase):
         self.assertEqual(out, [])
         self.assertEqual(stats["source_in_callee_dropped"], 2)
         self.assertEqual(stats["source_in_callee:42"], 2)
+        self.assertEqual(stats["hidden_callee_dropped"], 2)
+        self.assertEqual(stats["hidden_callee:42"], 2)
 
     def test_the_block_defining_the_source_is_kept(self):
         source = (f"char * {self.P61}b_badSource(char * data)\n{{\n    data = (char *)malloc(100*sizeof(char));\n"
@@ -651,6 +654,58 @@ class SourceInCalleeTests(unittest.TestCase):
         self.assertEqual(stats["source_in_callee_dropped"], 0)
 
 
+class HiddenCalleeTests(unittest.TestCase):
+    """N1/R18b: ogni chiamata NON risolta a una funzione dal nome rivelatore (`…Sink`, `…Source`, …) scarta il record."""
+
+    P21 = "CWE78_OS_Command_Injection__char_environment_system_21"
+    rec = SourceInCalleeTests.rec
+
+    def calling_sink(self, kind: str) -> tuple[dict, dict]:
+        holder = f"{self.P21}_bad" if kind == "bad" else "goodB2G1"
+        sink = "badSink" if kind == "bad" else "goodB2G1Sink"
+        code = (f"void {holder}()\n{{\n    char * data;\n    char data_buf[100] = FULL_COMMAND;\n    data = data_buf;\n"
+                f"    SYSTEM(data);\n    {sink}(data);\n}}")
+        return self.rec([(f"s01/{self.P21}.c", holder, 0, code)], 15, "system", "CWE-78")
+
+    def test_unresolved_leaky_callee_drops_the_record_for_both_labels(self):
+        stats = Counter()
+        pairs = [self.calling_sink("bad"), self.calling_sink("good")]
+        out = build_graph_data.examples_from_records([r for r, _ in pairs], [t for _, t in pairs], KB, 42, stats)
+        self.assertEqual(out, [])
+        self.assertEqual(stats["hidden_callee_dropped"], 2)
+        self.assertEqual(stats["hidden_callee:21"], 2)
+        self.assertEqual(stats["source_in_callee_dropped"], 0, "nessuna `…Source` fra i callee nascosti")
+
+    def test_a_shown_leaky_callee_is_kept(self):
+        caller = (f"static void goodB2G1()\n{{\n    char * data;\n    char data_buf[100] = FULL_COMMAND;\n"
+                  f"    data = data_buf;\n    goodB2G1Sink(data);\n}}")
+        sink = "static void goodB2G1Sink(char * data)\n{\n    SYSTEM(data);\n}"
+        rec, target = self.rec([(f"s01/{self.P21}.c", "goodB2G1", 1, caller),
+                                (f"s01/{self.P21}.c", "goodB2G1Sink", 0, sink)], 12, "system", "CWE-78")
+        stats = Counter()
+        self.assertEqual(len(build_graph_data.examples_from_records([rec], [target], KB, 42, stats)), 1)
+        self.assertEqual(stats["hidden_callee_dropped"], 0)
+
+    def test_library_helpers_and_literals_are_untouched(self):
+        code = (f"void {self.P21}_bad()\n{{\n    char data[100] = \"\";\n    strcpy(data, \"ls\");\n"
+                "    printLine(\"Benign, fixed string\");\n    if (globalReturnsTrueOrFalse()) {}\n    SYSTEM(data);\n}")
+        rec, target = self.rec([(f"s01/{self.P21}.c", f"{self.P21}_bad", 0, code)], 16, "system", "CWE-78")
+        stats = Counter()
+        self.assertEqual(len(build_graph_data.examples_from_records([rec], [target], KB, 42, stats)), 1)
+        self.assertEqual(stats["hidden_callee_dropped"], 0)
+
+    def test_harness_blocks_are_not_scanned(self):
+        """`main` chiama sia `…_good()` sia `…_bad()`: va tolto prima del controllo, non far scartare il record."""
+        rec, target = self.calling_sink("bad")
+        rec["blocks"][0]["code"] = rec["blocks"][0]["code"].replace(f"    badSink(data);\n", "")
+        main = f"int main()\n{{\n    {self.P21}_good();\n    {self.P21}_bad();\n    return 0;\n}}"
+        rec["blocks"].insert(0, {"file": f"s01/{self.P21}.c", "name": "main", "start_line": 100, "end_line": 105,
+                                 "depth": 1, "lang": "c", "code": main})
+        stats = Counter()
+        self.assertEqual(len(build_graph_data.examples_from_records([rec], [target], KB, 42, stats)), 1)
+        self.assertEqual(stats["hidden_callee_dropped"], 0)
+
+
 class CapPairsTests(unittest.TestCase):
     def test_cap_pairs_keeps_whole_pairs_in_input_order(self):
         pairs = [{"meta": {"pair_id": f"p{i // 2}", "cwe": "CWE-78", "variant": str(50 + i // 4), "label": i % 2}}
@@ -668,7 +723,8 @@ class CapPairsTests(unittest.TestCase):
 
         pairs = [ex("a", 1, 200), ex("a", 0, 100), ex("b", 1, 100), ex("b", 0, 110), ex("c", 1, 50), ex("c", 0, 50)]
         self.assertEqual(build_graph_data.pair_lengths(pairs), {"pairs_different_length": 2, "pairs_vulnerable_longer": 1,
-                                                                "pairs_length_within_15pct": 2})
+                                                                "pairs_length_within_15pct": 2,
+                                                                "pairs_different_length_within_15pct": 1})
 
 
 if __name__ == "__main__":
