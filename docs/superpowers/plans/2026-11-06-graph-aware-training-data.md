@@ -20,7 +20,7 @@ Dalla spec (valori verbatim):
 - Un esempio entra solo se il suo prompt completo non compare con l'etichetta opposta. Miscela: **0,7** slice completa, **0,3** solo blocco a profondità 0 (ammessa solo se quel prompt non è in conflitto).
 - Gruppo = test case (nome senza lettera finale). ≈**12%** delle varianti di flusso (≈6 su 48) è escluso da train e val e forma `unseen_variants`.
 - Juliet ≤ ~20% del train. P3 sintetici ≤ **15%** degli esempi Python con slice e mai nei file di valutazione.
-- Target: niente id CVE, descrizione CVE o messaggio di commit; `suggested_fix` = `fix_hint` del catalogo (vulnerabili) o «Nessuna modifica necessaria.»; per le slice il reasoning usa un vocabolario chiuso (origine del dato, percorso con profondità, motivo del verdetto).
+- Target: niente id CVE, descrizione CVE o messaggio di commit; `suggested_fix` = `fix_hint` del catalogo (vulnerabili) o "No change needed." (dopo il Task 5c); per le slice il reasoning usa un vocabolario chiuso (origine del dato, percorso con profondità, motivo del verdetto) **scritto in inglese** (decisione dell'utente, R13: "depth N"); system prompt, template, schede e hint del catalogo diventano inglesi nel Task 5c.
 - Ogni file dati < 50 MB; esempi oltre `--max-seq-length` (8192) scartati e contati.
 - Soglie (proposte, Task 15): S1 con chiamanti ≥ 70% (senza: 50% per costruzione); S2 scarto ≤ 10 punti; S3 ≤ 50% dei falsi positivi pygoat ancora «affected»; S4 troncati < 2% e 0 «CVE-»; S5 F1 non peggiore di 2 punti.
 
@@ -191,10 +191,10 @@ Condizioni che la spec implica ma nessun test del piano originario esercitava; o
   - `cap_balanced(examples: list[dict], max_total: int, seed: int) -> list[dict]`: campionamento uniforme per `(cwe, variant)` con etichette bilanciate.
 
 - [ ] **Step 1: Scrivi i test** (record di slice a 2 blocchi costruiti a mano):
-  - `test_example_has_multi_block_prompt_and_trace_meta`: `user` contiene 2 intestazioni `profondità`; `len(meta.trace.blocks) == 2`; `meta.view == "callers"`; `common.validate_finding(json.loads(assistant)) == []`.
+  - `test_example_has_multi_block_prompt_and_trace_meta`: `user` contiene 2 intestazioni `depth` (dopo il Task 5c; prima `profondità`); `len(meta.trace.blocks) == 2`; `meta.view == "callers"`; `common.validate_finding(json.loads(assistant)) == []`.
   - `test_reasoning_covers_every_cwe_and_kind`: per `JULIET_CWES × {"bad","g2b","b2g","good"}` esiste una frase e `LEAK_RE.search(frase) is None`; per `GENERIC[0]` e `GENERIC[1]` idem.
   - `test_cwe_outside_the_table_uses_the_generic_phrase`: un esempio CWE-601 con `label=1` ha un `reasoning` non vuoto che nomina il sink.
-  - `test_reasoning_names_root_function_and_depth_and_has_no_cve`: contiene il nome del blocco più esterno e `profondità 4` (per una catena a 5 blocchi) e non contiene `CVE-`.
+  - `test_reasoning_names_root_function_and_depth_and_has_no_cve`: contiene il nome del blocco più esterno e `depth 4` (per una catena a 5 blocchi; il reasoning è in inglese, R13) e non contiene `CVE-`.
   - `test_vulnerable_fix_is_catalog_hint_and_safe_fix_is_none_needed`.
   - `test_sink_only_keeps_depth_zero_block`.
   - `test_drop_conflicts_removes_prompts_seen_with_both_labels` → (rimasti, 2).
@@ -205,9 +205,39 @@ Condizioni che la spec implica ma nessun test del piano originario esercitava; o
   - `test_cap_balanced_limits_total_and_keeps_label_balance` (|vulnerabili − sicuri| ≤ 1).
   - `test_truncated_slice_is_rejected`: `build_example` su `truncated=True` solleva `ValueError`.
 - [ ] **Step 2: Falliscono**: `cd ai-pipeline && python3 -m unittest tests.test_graph_examples -v`.
-- [ ] **Step 3: Implementa** le firme sopra. Le frasi di `PHRASES`/`ORIGINS` le scrive chi implementa, in italiano, nello stile dell'esempio della spec («`system` in `fn_3a1f` riceve un valore che in `fn_91c2` (profondità 4) è una stringa costante e non è influenzabile dall'utente»); per `ORIGINS` si parte dai `source_token` che compaiono nei file estratti (Task 4 Step 5).
+- [ ] **Step 3: Implementa** le firme sopra. Le frasi di `PHRASES`/`ORIGINS` le scrive chi implementa, in inglese (decisione dell'utente, R13), nello stile «`system` in `fn_3a1f` receives a value that in `fn_91c2` (depth 4) is a constant string and cannot be influenced by the user»; per `ORIGINS` si parte dai `source_token` che compaiono nei file estratti (Task 4 Step 5).
 - [ ] **Step 4: Passano**: stesso comando.
 - [ ] **Step 5: Commit**: `git add ai-pipeline/graph_examples.py ai-pipeline/tests/test_graph_examples.py && git commit -m "feat(pipeline): costruzione di esempi con slice, view, conflitti e split"`
+
+---
+
+### Task 5c: prompt, schede e hint in inglese (decisione dell'utente)
+
+**Perché.** Nemotron è un modello addestrato soprattutto in inglese; il system prompt attuale gli chiede di scrivere `reasoning` e `suggested_fix` in italiano. Riaddestriamo dal modello base, quindi il contratto prompt può cambiare ora, prima di generare i dati. Cambiare `shared/` = cambiare il contratto prompt/matching (lo dice `shared/golden.json`): si rigenera tutto nel Task 13.
+
+**Files:**
+- Modify: `shared/prompt_template.json` (testi inglesi, `version` 1 → 2), `shared/golden.json` (sezioni `card` e `prompts`, vedi sotto)
+- Modify: `sast-engine/cwe_kb.json` (solo `summary`, `indicators`, `safe_patterns`, `fix_hint` delle 20 voci)
+- Modify: `ai-pipeline/common.py` (`render_card`), `sast-engine/src/rag_cwe.rs` (`render_card`)
+- Modify: `ai-pipeline/prepare_data.py` (`NO_FIX`), `ai-pipeline/benchmark.py` (~r.39: prompt di sistema «senza slice»), `ai-pipeline/model_card.py` (~r.300 e ~r.402: le frasi che dicono che prompt e output sono in italiano)
+- Modify: i test che citano il vecchio testo: `sast-engine/tests/pipeline.rs` (~r.69-71, intestazioni `righe…, profondità…`), test Rust e Python che citano stringhe italiane del prompt, della scheda o di `NO_FIX` (`grep -rn` sui file elencati; includi `ai-pipeline/tests/test_graph_examples.py`, `test_prepare_data.py`, `test_benchmark.py`, `test_model_card.py`, `test_common.py` se esistono).
+- Non modificare: id, alias, severità, `sinks` e `name` del catalogo; il codice dei motori; commenti e docstring (restano in italiano come nel resto del codice); `ai-pipeline/data/*.jsonl` (si rigenerano nel Task 13); `README.md` (Task 13).
+
+**Interfaces:**
+- Produces (testi esatti):
+  - `system`: `You are a SAST security analyzer. You receive a CWE rule, a candidate sink and the code trace (backward slice) that reaches it. Decide whether the sink is really vulnerable to that CWE: untrusted data must reach the sink without adequate validation or sanitization. Answer ONLY with a JSON object that conforms to the requested schema. Write "reasoning" and "suggested_fix" in English, citing files and lines.`
+  - `user`: righe nell'ordine di oggi, con i segnaposto invariati (`{cwe_card}`, `{sink_function}`, `{sink_file}`, `{sink_line}`, `{trace}`, `{cwe_id}`) e questi testi: `## CWE rule`, `## Candidate sink`, `- Function: …`, `- File: …`, `- Line: …`, `## Code trace (from the outermost caller to the sink)`, `## Task`, `Decide whether the sink \`{sink_function}\` is vulnerable to {cwe_id}. If it is not, answer with "vulnerable": false, "vex_status": "not_affected" and "severity": "NONE".`
+  - `block_header`: `### {file} · {name} (lines {start_line}-{end_line}, depth {depth})`
+  - `render_card` (Python e Rust identici): `{id} — {name}` / `Description: {summary}` / `Vulnerability indicators:` / `- …` / `Safe patterns:` / `- …`
+  - `NO_FIX = "No change needed."`
+  - Catalogo: traduzione fedele in inglese tecnico e conciso dei testi italiani, senza cambiarne il significato né gli esempi di codice (es. `cursor.execute('SELECT * FROM users WHERE id = %s', (uid,))` resta identico). Tutte le 20 voci.
+- Consumes: i test di parità esistenti (`prompt.rs`, `rag_cwe.rs`, Python `tests/` che leggono `shared/golden.json`).
+
+- [ ] **Step 1: Elenca** con `grep -rn` le stringhe italiane che finiscono nel prompt, nella scheda o nel target (distinguendole dai commenti/docstring, che restano). Scrivile nel report.
+- [ ] **Step 2: Scrivi i test che falliscono**: (a) `ai-pipeline/tests/test_prompt_language.py` — `shared/prompt_template.json` e, per OGNI voce di `cwe_kb.json`, la scheda renderizzata e `fix_hint` non contengono parole funzionali italiane (`\b(il|lo|la|gli|della|delle|degli|dei|nel|nella|che|non|viene|vengono|senza|dati|usare|evitare|una|sono)\b`, case-insensitive); `system` contiene `in English`; `NO_FIX == "No change needed."`; `version == 2`; (b) aggiorna i test esistenti che citano il vecchio testo. Verifica che falliscano (test sul testo italiano).
+- [ ] **Step 3: Implementa** le modifiche sopra. Poi rigenera `shared/golden.json` — SOLO le sezioni `card` e `prompts` (`normalize`, `callee_matches`, `kb_match`, `alias` restano identiche byte per byte): le righe attese si ricostruiscono con `common.render_card`/`common.render_user_prompt` sulle stesse entrate di oggi; aggiorna il campo `_comment` solo se dice qualcosa di falso.
+- [ ] **Step 4: Verifica**: `cd ai-pipeline && python3 -m unittest discover -s tests -t .` (l'unico fallimento ammesso è il noto `tests.test_notebook…test_section_order`), poi `systemd-run --user --scope -q -p MemoryMax=10G -p MemorySwapMax=0 cargo test --manifest-path sast-engine/Cargo.toml` (tutti verdi, nessun warning nuovo), poi ricompila il binario `cargo build --release` sotto lo stesso guard (serve ai task seguenti). Controlla a mano che `git diff --stat` tocchi solo i file elencati e che nel catalogo `id`, `aliases`, `default_severity`, `sinks` e `name` siano identici (confronto con `git show HEAD:sast-engine/cwe_kb.json` via script).
+- [ ] **Step 5: Commit**: `git add shared sast-engine ai-pipeline && git commit -m "feat(prompt): prompt, schede e hint del catalogo in inglese"`
 
 ---
 
@@ -245,7 +275,7 @@ Condizioni che la spec implica ma nessun test del piano originario esercitava; o
 **Interfaces:**
 - Consumes: file `data/graph/*_train.jsonl` e `*_val.jsonl` (Task 6 e successivi).
 - Produces:
-  - `_reasoning` non usa più `cve_desc`, `cve` né `note`; per i vulnerabili: «Il sink `X` alla riga N di F riceve dati non validati e risulta vulnerabile a CWE (nome).».
+  - `_reasoning` non usa più `cve_desc`, `cve` né `note`; per i vulnerabili, in inglese (R13): "The sink `X` at line N of F receives unvalidated data and is vulnerable to CWE-NN (name)."; per i sicuri una frase inglese analoga ("... does not receive untrusted data ..."), senza parole di `LEAK_RE`.
   - `suggested_fix` = `entry["fix_hint"]` per i vulnerabili; `_upstream_fix`, `FIX_PREFIX`, `MAX_DIFF_LINES` rimossi (`grep -n` e aggiorna i test che li citano).
   - `ALL_SOURCES` senza `juliet`; `--juliet` resta ma l'help dice «legacy: contiene etichette nel codice».
   - `--graph-dir DIR`: dopo il ciclo delle fonti accoda a `train` e `val` gli esempi di `DIR/*_train.jsonl` e `DIR/*_val.jsonl`; con `--graph-dir` il lettore CodeQL salta i file Python (`sources.codeql_records(files, kb, skip_python=True)`).
@@ -363,7 +393,7 @@ Condizioni che la spec implica ma nessun test del piano originario esercitava; o
   - `accuracy` accetta `--depth N` (default `None`).
 
 - [ ] **Step 1: Scrivi i test**:
-  - `test_sink_only_prompt_has_exactly_one_block_header` (conta `profondità` == 1 e il codice a profondità 0 c'è).
+  - `test_sink_only_prompt_has_exactly_one_block_header` (conta `depth` == 1 nelle intestazioni e il codice a profondità 0 c'è; intestazione inglese dopo il Task 5c).
   - `test_max_depth_filters_blocks` (`max_depth=1` su blocchi 0..4 → intestazioni a profondità 0 e 1).
   - `test_example_without_trace_falls_back_to_stored_messages`.
   - `test_pair_report_accuracy_and_both_correct` (4 esempi, 2 coppie, una giusta per intero e una a metà → `accuracy == 0.75`, `both_correct == 0.5`).
@@ -418,7 +448,7 @@ Condizioni che la spec implica ma nessun test del piano originario esercitava; o
 ### Task 14: Baseline «prima» (richiede il via dell'utente per vLLM)
 
 - [ ] **Step 1: Chiedi conferma** per avviare vLLM col modello attuale (`scripts/serve_vllm.sh` con `VLLM_BIN=/home/gabs/.venvs/tunatron-vllm/bin/vllm`, sotto `systemd-run … MemoryMax=14G`).
-- [ ] **Step 2: Misura il modello attuale** sugli stessi file del dopo: `benchmark.py accuracy --test data/eval/juliet_pairs.jsonl --systems llm-graph llm-sink-only --depth 5 --out results/before/juliet_pairs_d5.json`; stesso con `--depth 3`; poi `juliet_test`, `juliet_unseen_variants`, `py_codeql`, `data/test.jsonl` (S5) e `benchmark.py frozen`.
+- [ ] **Step 2: Misura il modello attuale** sugli stessi file del dopo (nota dal Task 5c: il modello attuale ha visto SOLO prompt italiani; per S5 usa il vecchio `data/test.jsonl` italiano da `git show 13aceea:ai-pipeline/data/test.jsonl`, e per S1–S4 i nuovi file inglesi dichiarando che per il vecchio modello è un prompt mai visto): `benchmark.py accuracy --test data/eval/juliet_pairs.jsonl --systems llm-graph llm-sink-only --depth 5 --out results/before/juliet_pairs_d5.json`; stesso con `--depth 3`; poi `juliet_test`, `juliet_unseen_variants`, `py_codeql`, `data/test.jsonl` (S5) e `benchmark.py frozen`.
 - [ ] **Step 3: Spegni vLLM** per PID (mai `pkill -f`) e committa `results/before/` (`git add results/before && git commit -m "results: baseline del modello attuale sui nuovi insiemi di valutazione"`).
 
 ### Task 15: Valutazione «dopo» e decisione sulla profondità
