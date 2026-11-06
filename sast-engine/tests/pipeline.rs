@@ -63,12 +63,12 @@ async fn prompt_for_the_vulnerable_sink_carries_the_rule_and_the_backward_slice(
     let user = body["messages"][1]["content"].as_str().unwrap();
     for expected in [
         "CWE-89 — SQL Injection",
-        "- Funzione: cursor.execute",
+        "- Function: cursor.execute",
         "- File: app/db.py",
-        "- Riga: 5",
-        "### app/routes.py · orders_handler (righe 3-5, profondità 2)",
-        "### app/service.py · list_orders (righe 3-4, profondità 1)",
-        "### app/db.py · fetch_orders (righe 3-6, profondità 0)",
+        "- Line: 5",
+        "### app/routes.py · orders_handler (lines 3-5, depth 2)",
+        "### app/service.py · list_orders (lines 3-4, depth 1)",
+        "### app/db.py · fetch_orders (lines 3-6, depth 0)",
     ] {
         assert!(user.contains(expected), "manca {expected:?} nel prompt:\n{user}");
     }

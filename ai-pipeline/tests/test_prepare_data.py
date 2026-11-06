@@ -126,9 +126,9 @@ class BuildExampleTests(unittest.TestCase):
 
         user = ex["messages"][1]["content"]
         self.assertIn("CWE-120 — Buffer Copy without Checking Size of Input", user)
-        self.assertIn("- Funzione: strcpy", user)
-        self.assertIn("- Riga: 3", user)
-        self.assertIn("### a.c · copy_name (righe 1-5, profondità 0)", user)
+        self.assertIn("- Function: strcpy", user)
+        self.assertIn("- Line: 3", user)
+        self.assertIn("### a.c · copy_name (lines 1-5, depth 0)", user)
         self.assertIn("    3 |     strcpy(dst, src);", user)
         self.assertEqual(ex["meta"]["label"], 1)
         self.assertEqual(ex["meta"]["kind"], "vulnerable")
@@ -143,7 +143,7 @@ class BuildExampleTests(unittest.TestCase):
         self.assertIsNone(reason)
         finding = json.loads(ex["messages"][2]["content"])
         self.assertEqual((finding["vulnerable"], finding["severity"], finding["vex_status"], finding["cwe_id"]), (False, "NONE", "not_affected", "CWE-120"))
-        self.assertEqual(finding["suggested_fix"], "Nessuna modifica necessaria.")
+        self.assertEqual(finding["suggested_fix"], "No change needed.")
         self.assertEqual(ex["meta"]["kind"], "patched")
         self.assertEqual(common.validate_finding(finding), [])
 
@@ -159,7 +159,7 @@ class BuildExampleTests(unittest.TestCase):
         patched = {("c1", "copy_name"): FIXED_FUNC}
         ex, _ = pd.build_example(record(), KB, patched=patched, max_chars=12000)
         fix = json.loads(ex["messages"][2]["content"])["suggested_fix"]
-        self.assertTrue(fix.startswith("Applicare la correzione upstream:"), fix)
+        self.assertTrue(fix.startswith("Apply the upstream fix:"), fix)
         self.assertIn("-    strcpy(dst, src);", fix)
         self.assertIn('+    snprintf(dst, 16, "%s", src);', fix)
 
@@ -184,7 +184,7 @@ class BuildExampleTests(unittest.TestCase):
         finding = json.loads(ex["messages"][2]["content"])
         self.assertEqual((finding["cwe_id"], finding["sink_function"], finding["sink_line"], finding["vulnerable"]), ("CWE-476", "f", 1, True))
         self.assertEqual(ex["meta"]["sink_kind"], "function")
-        self.assertIn("- Funzione: f", ex["messages"][1]["content"])
+        self.assertIn("- Function: f", ex["messages"][1]["content"])
         self.assertEqual(common.validate_finding(finding), [])
 
     def test_call_sinks_are_tagged_and_sinkless_mode_does_not_change_them(self):

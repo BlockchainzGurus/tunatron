@@ -42,8 +42,8 @@ from localize import extract_function_name, find_calls  # noqa: F401  (ri-esport
 HF_BASE = "https://huggingface.co/datasets/colin/PrimeVul/resolve/main"
 PRIMEVUL_FILES = {"train": "primevul_train.jsonl", "valid": "primevul_valid.jsonl", "test": "primevul_test.jsonl"}
 NONE_STRINGS = {"", "none", "null", "nan"}
-FIX_PREFIX = "Applicare la correzione upstream:"
-NO_FIX = "Nessuna modifica necessaria."
+FIX_PREFIX = "Apply the upstream fix:"
+NO_FIX = "No change needed."
 MAX_DIFF_LINES = 40
 MAX_CVE_DESC = 600
 
@@ -105,16 +105,16 @@ def _upstream_fix(vulnerable: str, fixed: str) -> str:
 
 
 def _reasoning(kind: str, sink: dict, file_label: str, entry: dict, record: dict) -> str:
-    where = f"Il sink `{sink['callee']}` alla riga {sink['line']} di {file_label}"
+    where = f"The sink `{sink['callee']}` at line {sink['line']} of {file_label}"
     if kind == "vulnerable":
-        text = f"{where} riceve dati non validati e risulta vulnerabile a {entry['id']} ({entry['name']})."
+        text = f"{where} receives unvalidated data and is vulnerable to {entry['id']} ({entry['name']})."
         if not is_none(record.get("cve_desc")):
-            text += f" Descrizione {record.get('cve') or 'CVE'}: {str(record['cve_desc']).strip()[:MAX_CVE_DESC]}"
+            text += f" Description of {record.get('cve') or 'CVE'}: {str(record['cve_desc']).strip()[:MAX_CVE_DESC]}"
         elif not is_none(record.get("note")):
-            text += f" Messaggio della correzione upstream: {str(record['note']).strip()[:MAX_CVE_DESC]}"
+            text += f" Upstream fix message: {str(record['note']).strip()[:MAX_CVE_DESC]}"
         return text
-    suffix = " (versione corretta della funzione)" if kind == "patched" else ""
-    return f"{where} non risulta sfruttabile per {entry['id']}{suffix}: nel codice analizzato i dati raggiungono il sink con controlli o limiti adeguati."
+    suffix = " (fixed version of the function)" if kind == "patched" else ""
+    return f"{where} is not exploitable for {entry['id']}{suffix}: in the analyzed code the data reaches the sink with adequate checks or bounds."
 
 
 def _choose_sink(kb: dict, func: str, lang: str, name: str, labels: list[str], record: dict,

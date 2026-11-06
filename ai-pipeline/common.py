@@ -76,10 +76,10 @@ def resolve_cwe(kb: dict, label: str) -> str | None:
 def render_card(entry: dict) -> str:
     lines = [
         f"{entry['id']} — {entry['name']}",
-        f"Descrizione: {entry['summary']}",
-        "Indicatori di vulnerabilità:",
+        f"Description: {entry['summary']}",
+        "Vulnerability indicators:",
         *[f"- {item}" for item in entry["indicators"]],
-        "Pattern sicuri:",
+        "Safe patterns:",
         *[f"- {item}" for item in entry["safe_patterns"]],
     ]
     return "\n".join(lines)

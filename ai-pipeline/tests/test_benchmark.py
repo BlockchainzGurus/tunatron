@@ -81,7 +81,7 @@ class CodeExtractionTests(unittest.TestCase):
         text = msgs[0]["content"] + msgs[1]["content"]
         self.assertNotIn("CWE-120", text)
         self.assertNotIn("strcpy", text)
-        self.assertNotIn("Regola CWE", text)
+        self.assertNotIn("CWE rule", text)
         self.assertIn("int f()\n{}", msgs[1]["content"])
         self.assertIn("```c", msgs[1]["content"])
 

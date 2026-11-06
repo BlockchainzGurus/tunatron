@@ -297,7 +297,7 @@ def _summary(ctx: dict) -> list[str]:
         "> Given a CWE rule, a candidate sink, and the backward code slice that reaches it, it decides whether the sink is genuinely vulnerable "
         "and produces a structured JSON finding (`vulnerable`, `vex_status`, `severity`, `reasoning`, `suggested_fix`).",
         "",
-        "The system prompt is in Italian, and `reasoning` and `suggested_fix` are written in Italian. Supported code languages: C, C++ and Python.",
+        "The system prompt is in English, and `reasoning` and `suggested_fix` are written in English. Supported code languages: C, C++ and Python.",
         "",
         "### Key Features",
         "- **Targeted Triage**: Analyzes backward code slices against CWE vulnerability indicators and safe patterns.",
@@ -311,18 +311,18 @@ def _summary(ctx: dict) -> list[str]:
         f"llm = LLM(model=\"{ctx['base_model']}\", trust_remote_code=True)  # or local model_bf16 / model_fp8",
         "",
         'prompt = """<extra_id_0>System',
-        "Sei un analizzatore di sicurezza SAST. Ricevi la regola di una CWE, un sink candidato e la traccia di codice (backward slice) che lo raggiunge. Stabilisci se il sink e' realmente vulnerabile a quella CWE. Rispondi ESCLUSIVAMENTE con un oggetto JSON conforme allo schema richiesto.",
+        "You are a SAST security analyzer. You receive a CWE rule, a candidate sink and the code trace (backward slice) that reaches it. Decide whether the sink is really vulnerable to that CWE. Answer ONLY with a JSON object that conforms to the requested schema.",
         "<extra_id_1>User",
-        "## Regola CWE",
+        "## CWE rule",
         "CWE-78 - OS Command Injection",
-        "## Sink candidato",
-        "- Funzione: system",
+        "## Candidate sink",
+        "- Function: system",
         "- File: app.c",
-        "- Riga: 42",
-        "## Traccia di codice",
+        "- Line: 42",
+        "## Code trace",
         "42 | system(user_input);",
-        "## Compito",
-        "Valuta se il sink e' vulnerabile a CWE-78.",
+        "## Task",
+        "Decide whether the sink is vulnerable to CWE-78.",
         "<extra_id_1>Assistant",
         '"""',
         "",
@@ -341,8 +341,8 @@ def _summary(ctx: dict) -> list[str]:
         '  "sink_file": "app.c",',
         '  "sink_line": 42,',
         '  "vex_status": "affected",',
-        '  "reasoning": "Il sink riceve input non fidato senza sanitizzazione...",',
-        '  "suggested_fix": "Utilizzare funzioni con array di argomenti (es. execv) invece di invocare una shell di sistema."',
+        '  "reasoning": "The sink receives untrusted input without sanitization...",',
+        '  "suggested_fix": "Use functions that take an argument array (e.g. execv) instead of invoking a system shell."',
         "}",
         "```",
     ]
@@ -399,7 +399,7 @@ def _data(ctx: dict) -> list[str]:
     lines = _table(["Split", "Examples", "Vulnerable", "Not vulnerable"], rows) + [""]
     for key, label in (("sources", "Sources"), ("languages", "Languages")):
         lines.append(f"- {label} ({first}): " + ", ".join(f"{name} {count:,}" for name, count in sorted(data[first][key].items(), key=lambda kv: -kv[1])))
-    return lines + ["- The prompts and the target rationale are in Italian."]
+    return lines + ["- The prompts and the target rationale are in English."]
 
 
 def _formats(ctx: dict) -> tuple[list[str], dict[str, dict]]:

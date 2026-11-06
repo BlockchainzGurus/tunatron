@@ -309,6 +309,14 @@ class RenderCardTests(unittest.TestCase):
             text = model_card.render_card(ctx)
             self.assertEqual([c for c in text if c in accents], [])
 
+    def test_the_card_says_prompts_and_targets_are_english(self):
+        text = model_card.render_card(full_ctx())
+        self.assertIn("The system prompt is in English, and `reasoning` and `suggested_fix` are written in English.", text)
+        self.assertIn("- The prompts and the target rationale are in English.", text)
+        self.assertNotIn("Italian", text)
+        for stale in ("Sei un analizzatore", "## Regola CWE", "- Funzione:", "Utilizzare funzioni"):
+            self.assertNotIn(stale, text)
+
     def test_images_only_for_existing_charts(self):
         text = model_card.render_card({**full_ctx(), "charts": {"loss_curves": "model_card_assets/loss_curves.png"}})
         self.assertIn("](model_card_assets/loss_curves.png)", text)

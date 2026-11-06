@@ -34,13 +34,13 @@ import vllm_flags
 
 SYSTEMS = ("semgrep", "llm-noslice", "llm-slice")
 NOSLICE_SYSTEM = (
-    "Sei un analizzatore di sicurezza SAST. Ricevi il codice di una funzione. Stabilisci se contiene una vulnerabilità "
-    "di sicurezza. Rispondi ESCLUSIVAMENTE con un oggetto JSON conforme allo schema richiesto. "
-    "Scrivi \"reasoning\" e \"suggested_fix\" in italiano, citando le righe."
+    "You are a SAST security analyzer. You receive the code of a function. Decide whether it contains a security "
+    "vulnerability. Answer ONLY with a JSON object that conforms to the requested schema. "
+    "Write \"reasoning\" and \"suggested_fix\" in English, citing lines."
 )
 NOSLICE_USER = (
-    "## Codice\n```{lang}\n{code}\n```\n\n## Compito\nIndividua eventuali vulnerabilità in questa funzione. "
-    "Se non ne trovi, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\"."
+    "## Code\n```{lang}\n{code}\n```\n\n## Task\nIdentify any vulnerabilities in this function. "
+    "If you find none, answer with \"vulnerable\": false, \"vex_status\": \"not_affected\" and \"severity\": \"NONE\"."
 )
 _NUMBERED_LINE = re.compile(r"^ *\d+ \| (.*)$")
 _FENCE = re.compile(r"```[A-Za-z+]*\n(.*?)\n```", re.S)

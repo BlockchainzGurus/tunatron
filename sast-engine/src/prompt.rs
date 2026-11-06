@@ -1,4 +1,4 @@
-//! Costruzione del prompt `Regola CWE + Traccia Codice`.
+//! Costruzione del prompt `CWE rule + Code trace`.
 //!
 //! Il template vive in `shared/prompt_template.json` ed è lo stesso usato dalla pipeline di training
 //! (`ai-pipeline/common.py`): i golden in `shared/golden.json` garantiscono output identico.
@@ -168,6 +168,6 @@ mod tests {
             lang: "c".into(),
             code: String::new(),
         };
-        assert_eq!(render_block(&b), "### a.c · f (righe 7-7, profondità 0)\n```c\n    7 | \n```");
+        assert_eq!(render_block(&b), "### a.c · f (lines 7-7, depth 0)\n```c\n    7 | \n```");
     }
 }

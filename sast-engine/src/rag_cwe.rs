@@ -93,11 +93,11 @@ pub fn callee_matches(pattern: &str, callee: &str) -> bool {
 pub fn render_card(entry: &CweEntry) -> String {
     let mut lines = vec![
         format!("{} — {}", entry.id, entry.name),
-        format!("Descrizione: {}", entry.summary),
-        "Indicatori di vulnerabilità:".to_string(),
+        format!("Description: {}", entry.summary),
+        "Vulnerability indicators:".to_string(),
     ];
     lines.extend(entry.indicators.iter().map(|i| format!("- {i}")));
-    lines.push("Pattern sicuri:".to_string());
+    lines.push("Safe patterns:".to_string());
     lines.extend(entry.safe_patterns.iter().map(|i| format!("- {i}")));
     lines.join("\n")
 }

@@ -38,7 +38,7 @@ from juliet_graph import JULIET_CWES
 
 KB = common.load_kb()
 ENTRY = {e["id"]: e for e in KB["entries"]}
-HEADER_RE = re.compile(r"^### .*profondità \d+\)$", re.M)
+HEADER_RE = re.compile(r"^### .*depth \d+\)$", re.M)
 META = {"source": "juliet-graph", "synthetic": False, "track": "juliet","group": "CWE78_x_54", "variant": "54"}
 
 # Sink gemello: lo stesso corpo nella catena vulnerabile e in quella sicura; decide solo il chiamante.
@@ -231,7 +231,7 @@ class BuildExampleTests(unittest.TestCase):
         self.assertEqual((bad["vulnerable"], bad["vex_status"], bad["severity"]),
                          (True, "affected", ENTRY["CWE-78"]["default_severity"]))
         safe = finding(example(record(GOOD_CALLER), 0))
-        self.assertEqual(safe["suggested_fix"], "Nessuna modifica necessaria.")
+        self.assertEqual(safe["suggested_fix"], "No change needed.")
         self.assertEqual((safe["vulnerable"], safe["vex_status"], safe["severity"]), (False, "not_affected", "NONE"))
         self.assertEqual(common.validate_finding(safe), [])
 

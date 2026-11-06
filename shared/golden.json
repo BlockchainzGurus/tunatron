@@ -45,20 +45,20 @@
       "name": "SQL Injection",
       "aliases": [],
       "default_severity": "HIGH",
-      "summary": "Query SQL costruita con input non fidato.",
-      "indicators": ["Concatenazione o f-string nella query", "Input da request/argv"],
-      "safe_patterns": ["Query parametrizzate"],
-      "fix_hint": "Usare query parametrizzate.",
+      "summary": "SQL query built with untrusted input.",
+      "indicators": ["Concatenation or f-string in the query", "Input from request/argv"],
+      "safe_patterns": ["Parameterized queries"],
+      "fix_hint": "Use parameterized queries.",
       "sinks": { "python": ["execute"], "c": [] }
     },
     "expected_lines": [
       "CWE-89 — SQL Injection",
-      "Descrizione: Query SQL costruita con input non fidato.",
-      "Indicatori di vulnerabilità:",
-      "- Concatenazione o f-string nella query",
-      "- Input da request/argv",
-      "Pattern sicuri:",
-      "- Query parametrizzate"
+      "Description: SQL query built with untrusted input.",
+      "Vulnerability indicators:",
+      "- Concatenation or f-string in the query",
+      "- Input from request/argv",
+      "Safe patterns:",
+      "- Parameterized queries"
     ]
   },
   "prompts": [
@@ -67,12 +67,12 @@
       "cwe_id": "CWE-89",
       "cwe_card_lines": [
         "CWE-89 — SQL Injection",
-        "Descrizione: Query SQL costruita con input non fidato.",
-        "Indicatori di vulnerabilità:",
-        "- Concatenazione o f-string nella query",
-        "- Input da request/argv",
-        "Pattern sicuri:",
-        "- Query parametrizzate"
+        "Description: SQL query built with untrusted input.",
+        "Vulnerability indicators:",
+        "- Concatenation or f-string in the query",
+        "- Input from request/argv",
+        "Safe patterns:",
+        "- Parameterized queries"
       ],
       "sink": { "function": "cursor.execute", "file": "src/db/orders.py", "line": 45 },
       "blocks": [
@@ -96,36 +96,36 @@
         }
       ],
       "expected_user_lines": [
-        "## Regola CWE",
+        "## CWE rule",
         "CWE-89 — SQL Injection",
-        "Descrizione: Query SQL costruita con input non fidato.",
-        "Indicatori di vulnerabilità:",
-        "- Concatenazione o f-string nella query",
-        "- Input da request/argv",
-        "Pattern sicuri:",
-        "- Query parametrizzate",
+        "Description: SQL query built with untrusted input.",
+        "Vulnerability indicators:",
+        "- Concatenation or f-string in the query",
+        "- Input from request/argv",
+        "Safe patterns:",
+        "- Parameterized queries",
         "",
-        "## Sink candidato",
-        "- Funzione: cursor.execute",
+        "## Candidate sink",
+        "- Function: cursor.execute",
         "- File: src/db/orders.py",
-        "- Riga: 45",
+        "- Line: 45",
         "",
-        "## Traccia di codice (dal chiamante più esterno al sink)",
-        "### src/routes.py · get_orders (righe 10-12, profondità 1)",
+        "## Code trace (from the outermost caller to the sink)",
+        "### src/routes.py · get_orders (lines 10-12, depth 1)",
         "```python",
         "   10 | def get_orders():",
         "   11 |     uid = request.args['id']",
         "   12 |     return fetch(uid)",
         "```",
         "",
-        "### src/db/orders.py · fetch (righe 44-45, profondità 0)",
+        "### src/db/orders.py · fetch (lines 44-45, depth 0)",
         "```python",
         "   44 | def fetch(uid):",
         "   45 |     cursor.execute(f\"SELECT * FROM users WHERE id={uid}\")",
         "```",
         "",
-        "## Compito",
-        "Valuta se il sink `cursor.execute` è vulnerabile a CWE-89. Se non lo è, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\"."
+        "## Task",
+        "Decide whether the sink `cursor.execute` is vulnerable to CWE-89. If it is not, answer with \"vulnerable\": false, \"vex_status\": \"not_affected\" and \"severity\": \"NONE\"."
       ]
     },
     {
@@ -145,23 +145,23 @@
         }
       ],
       "expected_user_lines": [
-        "## Regola CWE",
+        "## CWE rule",
         "CARD",
         "",
-        "## Sink candidato",
-        "- Funzione: f",
+        "## Candidate sink",
+        "- Function: f",
         "- File: a.c",
-        "- Riga: 1",
+        "- Line: 1",
         "",
-        "## Traccia di codice (dal chiamante più esterno al sink)",
-        "### a.c · f (righe 1-2, profondità 0)",
+        "## Code trace (from the outermost caller to the sink)",
+        "### a.c · f (lines 1-2, depth 0)",
         "```c",
         "    1 | x = '{cwe_id}';",
         "    2 | y = '{sink_file}';",
         "```",
         "",
-        "## Compito",
-        "Valuta se il sink `f` è vulnerabile a CWE-1. Se non lo è, rispondi con \"vulnerable\": false, \"vex_status\": \"not_affected\" e \"severity\": \"NONE\"."
+        "## Task",
+        "Decide whether the sink `f` is vulnerable to CWE-1. If it is not, answer with \"vulnerable\": false, \"vex_status\": \"not_affected\" and \"severity\": \"NONE\"."
       ]
     }
   ]
