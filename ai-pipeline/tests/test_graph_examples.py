@@ -4,6 +4,7 @@ I record di slice si costruiscono a mano (già anonimizzati, nomi `fn_<hex>`): n
 """
 import copy
 import json
+import random
 import re
 import unittest
 
@@ -120,7 +121,7 @@ class BuildExampleTests(unittest.TestCase):
         self.assertNotIn("getenv", user(ex))
         self.assertEqual(len(ex["meta"]["trace"]["blocks"]), 2)
         self.assertEqual(ex["meta"]["view"], "sink_only")
-        self.assertIn("`fn_e0e0e0` (profondità 0, unico blocco mostrato)", finding(ex)["reasoning"])
+        self.assertIn("`fn_e0e0e0` (depth 0, only block shown)", finding(ex)["reasoning"])
         self.assertNotIn("fn_d0d0d0", finding(ex)["reasoning"])
         with self.assertRaises(ValueError):
             example(record(), 1, view="whatever")
@@ -153,7 +154,8 @@ class BuildExampleTests(unittest.TestCase):
                     self.assertIsNone(LEAK_RE.search(reasoning), (cwe, kind, origin, reasoning))
                     self.assertNotIn("CVE-", reasoning)
                     self.assertIn("`system`", reasoning)
-                    self.assertIn("`fn_d0d0d0` (profondità 1)", reasoning)
+                    self.assertIn("comes from `fn_d0d0d0` (depth 1)", reasoning)
+                    self.assertNotIn("profondità", reasoning)
 
     def test_origin_is_ignored_for_g2b_and_neutral_when_missing(self):
         g2b = finding(example(record(), 0, "g2b", "environment"))["reasoning"]
@@ -183,8 +185,8 @@ class BuildExampleTests(unittest.TestCase):
                     self.assertNotIn(text, reasoning, (cwe, kind, origin))
                 self.assertNotIn("fn_a1a1a1", reasoning)
                 self.assertNotIn("fn_a2a2a2", reasoning)
-                self.assertNotIn("risale a", reasoning)
-                self.assertIn("profondità 0", reasoning)
+                self.assertNotIn("comes from", reasoning)
+                self.assertIn("depth 0", reasoning)
                 self.assertIn(f"`{callee}` in `fn_a0a0a0`", reasoning)
                 self.assertIn(PHRASES.get((cwe, kind), GENERIC[label]), reasoning)
                 self.assertIsNone(LEAK_RE.search(reasoning))
@@ -194,7 +196,7 @@ class BuildExampleTests(unittest.TestCase):
                 single = example(sink_only(rec), label, kind, origin)
                 self.assertEqual(finding(single)["reasoning"], reasoning)
                 full = finding(example(rec, label, kind, origin))["reasoning"]
-                self.assertIn("risale a `fn_a2a2a2` (profondità 2)", full)
+                self.assertIn("comes from `fn_a2a2a2` (depth 2)", full)
 
     def test_sink_only_reasoning_makes_no_claim_about_unseen_blocks(self):
         self.assert_sink_only_claims_nothing_unseen(chain(3), "CWE-78", "system")
@@ -217,7 +219,7 @@ class BuildExampleTests(unittest.TestCase):
         ex = example(chain(5), 1)
         reasoning = finding(ex)["reasoning"]
         self.assertIn("fn_a4a4a4", reasoning)
-        self.assertIn("profondità 4", reasoning)
+        self.assertIn("(depth 4)", reasoning)
         self.assertIn("`system`", reasoning)
         self.assertNotIn("CVE-", reasoning)
         self.assertEqual(len(HEADER_RE.findall(user(ex))), 5)
@@ -289,6 +291,24 @@ class ConflictAndViewTests(unittest.TestCase):
         blocked = [{"full": cand["full"], "sink_only": None} for cand in candidates]
         self.assertTrue(all(c is cand["full"] for c, cand in zip(choose_views(blocked, seed=42), blocked)))
 
+    def test_choose_views_keeps_sink_only_picks_label_balanced(self):
+        candidates = [{"full": fake(i, 0), "sink_only": fake(10_000 + i, 0)} for i in range(700)]
+        candidates += [{"full": fake(i, 1), "sink_only": fake(10_000 + i, 1)} for i in range(700, 720)]
+        chosen = choose_views(candidates, seed=42)
+        picked = [c for c, cand in zip(chosen, candidates) if c is cand["sink_only"]]
+        labels = [c["meta"]["label"] for c in picked]
+        self.assertGreater(len(picked), 0)
+        self.assertLessEqual(abs(labels.count(1) - labels.count(0)), 1)
+        self.assertTrue(all(c is cand["full"] or c is cand["sink_only"] for c, cand in zip(chosen, candidates)))
+        self.assertEqual(sum(c is cand["full"] for c, cand in zip(chosen, candidates)), 720 - len(picked))
+
+    def test_choose_views_does_not_depend_on_input_order(self):
+        candidates = [{"full": fake(i, int(i % 7 == 0)), "sink_only": fake(10_000 + i, int(i % 7 == 0))} for i in range(500)]
+        shuffled = candidates[:]
+        random.Random(3).shuffle(shuffled)
+        keys = lambda cands: {prompt_key(c) for c in choose_views(cands, seed=9)}  # noqa: E731
+        self.assertEqual(keys(candidates), keys(shuffled))
+
     def test_make_candidates_drops_sink_only_view_of_twins(self):
         bad = example(record(BAD_CALLER), 1)
         good = example(record(GOOD_CALLER), 0)
@@ -308,6 +328,16 @@ class ConflictAndViewTests(unittest.TestCase):
         single = example(sink_only(record()), 1)
         self.assertIsNone(make_candidates([single], KB)[0]["sink_only"])
 
+    def test_make_candidates_gives_no_sink_only_view_to_g2b_or_good_with_callers(self):
+        g2b = example(record(GOOD_CALLER), 0, "g2b")
+        good = example(record(GOOD_CALLER, OTHER_SINK), 0, "good")
+        b2g = example(record(BAD_CALLER, OTHER_SINK), 0, "b2g")
+        cands = make_candidates([g2b, good, b2g], KB)
+        self.assertIsNone(cands[0]["sink_only"])
+        self.assertIsNone(cands[1]["sink_only"])
+        self.assertIsNotNone(cands[2]["sink_only"])
+        self.assertEqual(cands[2]["sink_only"]["meta"]["variant_kind"], "b2g")
+
 
 class PairTests(unittest.TestCase):
     def test_link_pairs_pairs_equal_sink_only_prompt_with_opposite_labels(self):
@@ -326,6 +356,18 @@ class PairTests(unittest.TestCase):
         again = link_pairs([bad, good_sink_only], KB)
         self.assertEqual(len(again), 2)
         self.assertEqual(again[0]["meta"]["pair_id"], pairs[0]["meta"]["pair_id"])
+
+    def test_link_pairs_only_pairs_within_the_same_group(self):
+        bad = example(record(BAD_CALLER), 1, meta={**META, "group": "CWE78_a_54"})
+        good_other = example(record(GOOD_CALLER), 0, meta={**META, "group": "CWE78_b_54"})
+        good_same = example(record(GOOD_CALLER), 0, meta={**META, "group": "CWE78_a_54"})
+        self.assertEqual(link_pairs([bad, good_other], KB), [])
+        self.assertEqual(len(link_pairs([bad, good_same], KB)), 2)
+        no_group = {k: v for k, v in META.items() if k != "group"}
+        bare_bad = example(record(BAD_CALLER), 1, meta=no_group)
+        bare_good = example(record(GOOD_CALLER), 0, meta=no_group)
+        self.assertEqual(len(link_pairs([bare_bad, bare_good], KB)), 2)
+        self.assertEqual(link_pairs([bare_bad, good_same], KB), [])
 
     def test_link_pairs_leaves_extra_and_traceless_examples_unpaired(self):
         bad1 = example(record(BAD_CALLER), 1)
@@ -392,6 +434,14 @@ class SplitAndCapTests(unittest.TestCase):
         few = [fake(i, 1) for i in range(50)] + [fake(100 + i, 0) for i in range(3)]
         out = cap_balanced(few, max_total=40, seed=1)
         self.assertEqual(sorted(e["meta"]["label"] for e in out), [0, 0, 0, 1, 1, 1, 1])
+
+    def test_cap_balanced_does_not_depend_on_input_order(self):
+        examples = [fake(i, int(i % 3 == 0), "CWE-78" if i % 2 else "CWE-120", f"{i % 4:02d}") for i in range(400)]
+        shuffled = examples[:]
+        random.Random(5).shuffle(shuffled)
+        keys = lambda exs: {prompt_key(e) for e in cap_balanced(exs, max_total=61, seed=42)}  # noqa: E731
+        self.assertEqual(keys(examples), keys(shuffled))
+        self.assertEqual(len(keys(examples)), 61)
 
 
 if __name__ == "__main__":

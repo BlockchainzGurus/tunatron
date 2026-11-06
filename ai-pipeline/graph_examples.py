@@ -36,71 +36,72 @@ NO_FIX = prepare_data.NO_FIX
 # lo stesso id (per esempio CWE-415 sotto CWE-416, CWE-680/191/195 sotto CWE-190, CWE-121/122/124/127 sotto CWE-120)
 # e per i sink che il catalogo riconosce (CWE-416: `free`; CWE-190: le allocazioni; CWE-120: le copie).
 PHRASES: dict[tuple[str, str], str] = {
-    ("CWE-78", "bad"): "il valore entra nel comando senza validazione né neutralizzazione, quindi può aggiungere comandi della shell",
-    ("CWE-78", "g2b"): "il comando non è influenzabile dall'esterno, quindi la sua esecuzione non è sfruttabile",
-    ("CWE-78", "b2g"): "prima dell'uso il valore viene validato, quindi non può aggiungere comandi della shell",
-    ("CWE-78", "good"): "nel percorso che arriva al sink il comando non contiene dati influenzabili dall'esterno",
-    ("CWE-120", "bad"): "la copia avviene senza verificare che dimensioni e posizioni restino dentro i buffer, quindi può leggere o scrivere oltre i limiti",
-    ("CWE-120", "g2b"): "le dimensioni in gioco sono compatibili con i buffer, quindi la copia resta nei limiti",
-    ("CWE-120", "b2g"): "prima della copia la dimensione viene confrontata con la capacità del buffer, quindi la copia resta nei limiti",
-    ("CWE-120", "good"): "nel percorso che arriva al sink la copia resta nei limiti dei buffer",
-    ("CWE-190", "bad"): "il valore raggiunge il sink senza un controllo dei limiti, quindi il calcolo può andare in overflow o cambiare di segno",
-    ("CWE-190", "g2b"): "il valore è abbastanza piccolo da restare nei limiti del tipo, quindi il calcolo non va in overflow",
-    ("CWE-190", "b2g"): "prima dell'uso il valore viene confrontato con un limite, quindi il calcolo resta nei limiti del tipo",
-    ("CWE-190", "good"): "nel percorso che arriva al sink il calcolo resta nei limiti del tipo",
-    ("CWE-416", "bad"): "nel percorso la memoria viene liberata e poi usata o liberata di nuovo, cioè si accede a memoria non più valida",
-    ("CWE-416", "g2b"): "la memoria viene liberata una sola volta e non viene usata dopo il rilascio",
-    ("CWE-416", "b2g"): "dopo il rilascio la memoria non viene più usata né liberata di nuovo",
-    ("CWE-416", "good"): "la memoria viene liberata una sola volta e non viene usata dopo il rilascio",
+    ("CWE-78", "bad"): "the value enters the command without validation or neutralization, so it can inject shell commands",
+    ("CWE-78", "g2b"): "the command cannot be influenced from outside, so executing it is not exploitable",
+    ("CWE-78", "b2g"): "the value is validated before use, so it cannot inject shell commands",
+    ("CWE-78", "good"): "on the path to the sink the command contains no externally controllable data",
+    ("CWE-120", "bad"): "the copy happens without checking that sizes and offsets stay inside the buffers, so it can read or write out of bounds",
+    ("CWE-120", "g2b"): "the sizes involved are compatible with the buffers, so the copy stays in bounds",
+    ("CWE-120", "b2g"): "the size is compared with the buffer capacity before the copy, so the copy stays in bounds",
+    ("CWE-120", "good"): "on the path to the sink the copy stays within the buffer bounds",
+    ("CWE-190", "bad"): "the value reaches the sink without a range check, so the computation can overflow or change sign",
+    ("CWE-190", "g2b"): "the value is small enough to stay within the range of the type, so the computation does not overflow",
+    ("CWE-190", "b2g"): "the value is compared with a limit before use, so the computation stays within the range of the type",
+    ("CWE-190", "good"): "on the path to the sink the computation stays within the range of the type",
+    ("CWE-416", "bad"): "on this path the memory is released and then used or released again, so memory that is no longer valid is accessed",
+    ("CWE-416", "g2b"): "the memory is released only once and is not used after the release",
+    ("CWE-416", "b2g"): "after the release the memory is no longer used or released again",
+    ("CWE-416", "good"): "the memory is released only once and is not used after the release",
 }
 
 # Motivo per ogni CWE fuori da `PHRASES` (tracce Python), per etichetta.
 GENERIC: dict[int, str] = {
-    1: "un dato di origine non fidata arriva al sink senza validazione né sanificazione",
-    0: "il valore che arriva al sink è costante oppure viene controllato prima dell'uso",
+    1: "untrusted data reaches the sink without validation or sanitization",
+    0: "the value reaching the sink is constant or is checked before use",
 }
 
-# Origine del dato dal `source_token` del NOME DEL FILE Juliet (`juliet_graph.source_token`), come complemento di
-# «il dato è ricavato da …». Vale solo per le varianti `bad` e `b2g`, che usano davvero la sorgente del nome.
+# Origine del dato dal `source_token` del NOME DEL FILE Juliet (`juliet_graph.source_token`), come frase completa (nessuna
+# preposizione condivisa incollata davanti). Vale solo per le varianti `bad` e `b2g`, che usano davvero la sorgente del
+# nome.
 ORIGINS: dict[str, str] = {
-    "environment": "una variabile d'ambiente",
-    "console": "una riga letta dalla console",
-    "fgets": "una riga letta con fgets",
-    "fscanf": "un numero letto con fscanf",
-    "file": "il contenuto di un file",
-    "connect_socket": "dati ricevuti su un socket di rete aperto dal programma",
-    "listen_socket": "dati ricevuti su un socket di rete in ascolto",
-    "rand": "un valore casuale",
-    "max": "il valore massimo rappresentabile dal tipo",
-    "min": "il valore minimo rappresentabile dal tipo",
-    "negative": "un numero negativo",
-    "large": "un numero grande",
-    "fixed": "un valore fisso scritto nel codice",
+    "environment": "the data is read from an environment variable",
+    "console": "the data is a line read from the console",
+    "fgets": "the data is a line read with fgets",
+    "fscanf": "the data is a number read with fscanf",
+    "file": "the data is read from the content of a file",
+    "connect_socket": "the data is received on a network socket opened by the program",
+    "listen_socket": "the data is received on a listening network socket",
+    "rand": "the data is a random value",
+    "max": "the data is the largest value the type can hold",
+    "min": "the data is the smallest value the type can hold",
+    "negative": "the data is a negative number",
+    "large": "the data is a large number",
+    "fixed": "the data is a constant value hard-coded in the program",
 }
-ORIGIN_FALLBACK = "dati esterni"
+ORIGIN_FALLBACK = "the data comes from an external source"
 
 # Variante `g2b`: la sorgente è quella buona (una costante), anche se il nome del file dice `environment`.
 G2B_ORIGINS: dict[str, str] = {
-    "CWE-78": "il comando è formato solo da stringhe costanti scritte nel codice",
-    "CWE-120": "le dimensioni dei dati copiati sono fissate nel codice",
-    "CWE-190": "il valore è una piccola costante scritta nel codice",
-    "CWE-416": "il puntatore indica memoria appena allocata e non ancora liberata",
+    "CWE-78": "the command is built only from constant strings in the code",
+    "CWE-120": "the sizes of the copied data are hard-coded",
+    "CWE-190": "the value is a small constant in the code",
+    "CWE-416": "the pointer refers to memory that was just allocated and not yet released",
 }
-G2B_FALLBACK = "il valore è una costante scritta nel codice"
+G2B_FALLBACK = "the value is a constant in the code"
 
 # Nessuna origine affidabile (`source_token` assente, o variante `good`): una frase vera per ogni variante della CWE.
 NEUTRAL_ORIGINS: dict[str, str] = {
-    "CWE-78": "il dato diventa parte del comando eseguito",
-    "CWE-120": "la copia dipende dal rapporto fra la quantità di dati da copiare e la capacità dei buffer coinvolti",
-    "CWE-190": "il dato è un intero usato nel calcolo di una dimensione o di un risultato",
-    "CWE-416": "il dato è un puntatore a memoria allocata dinamicamente",
+    "CWE-78": "the data becomes part of the executed command",
+    "CWE-120": "the copy depends on how the amount of data to copy compares with the capacity of the buffers involved",
+    "CWE-190": "the data is an integer used to compute a size or a result",
+    "CWE-416": "the data is a pointer to dynamically allocated memory",
 }
-NEUTRAL_FALLBACK = "il dato arriva al sink attraverso i blocchi mostrati"
+NEUTRAL_FALLBACK = "the data reaches the sink through the blocks shown"
 
 # Prompt con il solo blocco a profondità 0 (view `sink_only`, o slice senza chiamanti): il reasoning afferma solo ciò che
-# il prompt mostra, quindi niente origine e niente «risale a …». Il motivo resta `PHRASES`/`GENERIC`: un esempio solo-sink
-# esiste solo se il suo prompt non è gemello di uno con l'etichetta opposta.
-SINK_ONLY_REASONING = "`{sink}` in `{fn}` (profondità 0, unico blocco mostrato): l'origine del dato non è visibile nel blocco; {reason}."
+# il prompt mostra, quindi niente origine e niente «comes from …». Il motivo resta `PHRASES`/`GENERIC`: un esempio
+# solo-sink esiste solo se il suo prompt non è gemello di uno con l'etichetta opposta.
+SINK_ONLY_REASONING = "`{sink}` in `{fn}` (depth 0, only block shown): the origin of the data is not visible in this block; {reason}."
 
 # Chiavi di `meta` calcolate qui: chi chiama passa solo le altre (`source`, `synthetic`, `track`, `group`, `variant`…).
 _COMPUTED = frozenset({"label", "kind", "cwe", "lang", "sink_function", "sink_line", "sink_kind", "func_hash", "view",
@@ -172,13 +173,13 @@ def _origin_clause(cwe_id: str, variant_kind: str, origin: str | None) -> str:
 
     `origin` è il `source_token` del nome del file: per `g2b` è falso (la sorgente buona è una costante, il nome dice
     ancora `environment`) e per `good` non è garantito che quella sorgente arrivi al sink; lì e quando manca si usa una
-    frase neutra della CWE. «dati esterni» resta solo per un token sconosciuto.
+    frase neutra della CWE. `ORIGIN_FALLBACK` resta solo per un token sconosciuto.
     """
     if variant_kind == "g2b":
         return G2B_ORIGINS.get(cwe_id, G2B_FALLBACK)
     if origin is None or variant_kind == "good":
         return NEUTRAL_ORIGINS.get(cwe_id, NEUTRAL_FALLBACK)
-    return f"il dato è ricavato da {ORIGINS.get(origin, ORIGIN_FALLBACK)}"
+    return ORIGINS.get(origin, ORIGIN_FALLBACK)
 
 
 def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, sink_function: str, shown: list[dict]) -> str:
@@ -191,8 +192,8 @@ def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, s
     if len(shown) == 1:
         return SINK_ONLY_REASONING.format(sink=sink_function, fn=sink_block["name"], reason=reason)
     root = max(shown, key=lambda b: b["depth"])
-    return (f"`{sink_function}` in `{sink_block['name']}` riceve un dato che risale a `{root['name']}` "
-            f"(profondità {root['depth']}): {_origin_clause(cwe_id, variant_kind, origin)}; {reason}.")
+    return (f"`{sink_function}` in `{sink_block['name']}` receives data that comes from `{root['name']}` "
+            f"(depth {root['depth']}): {_origin_clause(cwe_id, variant_kind, origin)}; {reason}.")
 
 
 def build_example(rec: dict, kb: dict, *, label: int, variant_kind: str, origin: str | None, meta: dict,
@@ -283,7 +284,9 @@ def make_candidates(fulls: list[dict], kb: dict) -> list[dict]:
     La view «solo sink» si costruisce con `build_example(..., view="sink_only")` dalla stessa traccia, con etichetta,
     variante, origine e meta dell'esempio completo. È None quando la resa solo-sink della sua traccia compare fra i
     `fulls` con entrambe le etichette (i gemelli: lì decidono i chiamanti), e quando la traccia non ha chiamanti (la
-    slice completa È già il solo sink, e un doppione con `view="sink_only"` sarebbe solo rumore).
+    slice completa È già il solo sink, e un doppione con `view="sink_only"` sarebbe solo rumore). È None anche per
+    `variant_kind` `g2b` e `good` con chiamanti: in Juliet il loro sink ha lo stesso corpo del gemello `bad`, quindi il
+    solo sink non è decidibile anche quando il gemello manca dai dati.
     """
     keys = [_sha(_user_content(messages_from_trace(ex["meta"]["trace"], kb, sink_only=True))) for ex in fulls]
     labels: dict[str, set[int]] = defaultdict(set)
@@ -294,7 +297,8 @@ def make_candidates(fulls: list[dict], kb: dict) -> list[dict]:
         meta = ex["meta"]
         trace = meta["trace"]
         alone = None
-        if len(labels[key]) == 1 and any(b["depth"] > 0 for b in trace["blocks"]):
+        has_callers = any(b["depth"] > 0 for b in trace["blocks"])
+        if len(labels[key]) == 1 and has_callers and meta["variant_kind"] not in ("g2b", "good"):
             alone = build_example(
                 {"sink": trace["sink"], "blocks": trace["blocks"], "truncated": False}, kb,
                 label=meta["label"], variant_kind=meta["variant_kind"], origin=meta["origin"],
@@ -307,14 +311,25 @@ def make_candidates(fulls: list[dict], kb: dict) -> list[dict]:
 def choose_views(candidates: list[dict], seed: int, p_callers: float = 0.7) -> list[dict]:
     """Per ogni candidato la view completa con probabilità `p_callers`, altrimenti il solo sink se esiste.
 
-    La scelta dipende da sha256(seme, prompt della view completa): stabile fra esecuzioni e indipendente dall'ordine.
+    Le scelte solo-sink restano bilanciate per etichetta (|vulnerabili − sicuri| ≤ 1): se non lo sono, l'eccedenza
+    dell'etichetta più numerosa torna alla view completa, a partire dal più piccolo sha256(seme, "rebalance", prompt
+    completo). Così «si vede solo il sink» non diventa una scorciatoia per un'etichetta; la quota solo-sink
+    `1 − p_callers` è quindi un MASSIMO, non il valore atteso. Tutto dipende da sha256 del prompt completo: stabile fra
+    esecuzioni e indipendente dall'ordine dei candidati.
     """
-    out = []
-    for cand in candidates:
+    keys = [prompt_key(cand["full"]) for cand in candidates]
+    picked: dict[int, list[int]] = {0: [], 1: []}
+    for i, (cand, key) in enumerate(zip(candidates, keys)):
         alone = cand.get("sink_only")
-        use_alone = alone is not None and _unit(f"{seed}:view:{prompt_key(cand['full'])}") >= p_callers
-        out.append(alone if use_alone else cand["full"])
-    return out
+        if alone is not None and _unit(f"{seed}:view:{key}") >= p_callers:
+            picked[alone["meta"]["label"]].append(i)
+    major, minor = (1, 0) if len(picked[1]) > len(picked[0]) else (0, 1)
+    surplus = len(picked[major]) - len(picked[minor]) - 1
+    if surplus > 0:
+        back = sorted(picked[major], key=lambda i: (_sha(f"{seed}:rebalance:{keys[i]}"), keys[i]))[:surplus]
+        picked[major] = sorted(set(picked[major]) - set(back))
+    use_alone = set(picked[0]) | set(picked[1])
+    return [cand["sink_only"] if i in use_alone else cand["full"] for i, cand in enumerate(candidates)]
 
 
 # --------------------------------------------------------------------------- coppie
@@ -334,7 +349,8 @@ def link_pairs(examples: list[dict], kb: dict | None = None) -> list[dict]:
     del loro `prompt_key` (poi dell'indice): il primo vulnerabile col primo sicuro e così via; gli esclusi restano
     senza coppia. Restano fuori anche gli esempi senza `meta.trace` o con una traccia non ricostruibile, e quelli la
     cui slice COMPLETA compare con entrambe le etichette: se anche i chiamanti coincidono la coppia non è decidibile.
-    `kb` di default è il catalogo del progetto.
+    Si accoppiano solo esempi con lo stesso `meta.group` (test case; chi non ce l'ha solo con chi non ce l'ha): due
+    test case diversi non sono gemelli anche se il sink coincide. `kb` di default è il catalogo del progetto.
     """
     kb = common.load_kb() if kb is None else kb
     sink_keys: dict[int, str] = {}
@@ -356,7 +372,8 @@ def link_pairs(examples: list[dict], kb: dict | None = None) -> list[dict]:
     groups: dict[str, dict[int, list[int]]] = defaultdict(lambda: {0: [], 1: []})
     for i, key in sink_keys.items():
         if len(full_labels[full_keys[i]]) == 1:
-            groups[key][examples[i]["meta"]["label"]].append(i)
+            meta = examples[i]["meta"]
+            groups[f"{key}:{json.dumps(meta.get('group'))}"][meta["label"]].append(i)
 
     pair_of: dict[int, str] = {}
     for key, by_label in groups.items():
@@ -387,7 +404,7 @@ def _round_robin(indices: list[int], examples: list[dict], n: int, seed: int) ->
     for i in indices:
         meta = examples[i]["meta"]
         buckets[(str(meta.get("cwe")), str(meta.get("variant")))].append(i)
-    queues = [sorted(buckets[b], key=lambda i: (_sha(f"{seed}:cap:{i}"), i))
+    queues = [sorted(buckets[b], key=lambda i: (_sha(f"{seed}:cap:{prompt_key(examples[i])}"), i))
               for b in sorted(buckets, key=lambda b: (_sha(f"{seed}:bucket:{b[0]}:{b[1]}"), b))]
     chosen: list[int] = []
     for r in range(max((len(q) for q in queues), default=0)):
@@ -404,7 +421,8 @@ def cap_balanced(examples: list[dict], max_total: int, seed: int) -> list[dict]:
 
     Ogni etichetta ha `min(max_total // 2, vulnerabili, sicuri)` posti (uno in più all'etichetta più numerosa se resta
     spazio); dentro un'etichetta i gruppi `(cwe, variant)` danno un esempio a turno, così un gruppo piccolo entra tutto e
-    i grandi si dividono il resto. L'ordine d'ingresso si conserva.
+    i grandi si dividono il resto. Dentro un gruppo l'ordine è sha256(seme, `prompt_key`), così l'insieme scelto non
+    dipende dall'ordine della lista; l'uscita conserva l'ordine d'ingresso.
     """
     by_label: dict[int, list[int]] = {0: [], 1: []}
     for i, ex in enumerate(examples):
