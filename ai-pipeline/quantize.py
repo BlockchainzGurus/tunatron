@@ -53,6 +53,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--bf16-embeddings", action="store_true",
                     help="NVFP4: tiene la tabella degli embedding in BF16 invece che in NVFP4 W4A16 (ricetta NVIDIA). Da usare solo se vLLM "
                          "non carica il checkpoint: il suo loader ModelOpt non gestisce gli embedding quantizzati (vedi README)")
+    ap.add_argument("--bf16-lm-head", action="store_true",
+                    help="NVFP4: tiene la lm_head in BF16 invece che in FP8 W8A16 (ricetta NVIDIA). Da usare se vLLM carica il checkpoint ma "
+                         "genera testo senza senso: la lm_head W8A16 si esporta senza input_scale e vLLM la legge come W8A8 (vedi README)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args(argv)
     args.formats = [args.only] if args.only else ["fp8", "nvfp4"]
@@ -102,11 +105,16 @@ def fp8_quant_cfg(base: dict, pattern: str) -> dict:
     return cfg
 
 
-def nvfp4_quant_cfg(base: dict, bf16_embeddings: bool = False) -> dict:
-    """Ricetta NVFP4 di NVIDIA per il 4B, invariata; con `bf16_embeddings` una regola in coda spegne la quantizzazione degli embedding."""
+def nvfp4_quant_cfg(base: dict, bf16_embeddings: bool = False, bf16_lm_head: bool = False) -> dict:
+    """Ricetta NVFP4 di NVIDIA per il 4B, invariata; in coda una regola per opzione (l'ultima che corrisponde vince):
+    `bf16_embeddings` spegne la quantizzazione degli embedding, `bf16_lm_head` quella della lm_head (pesi e attivazioni)."""
     cfg = copy.deepcopy(base)
+    extra = []
     if bf16_embeddings:
-        cfg["quant_cfg"] = list(cfg["quant_cfg"]) + [{"quantizer_name": "*embeddings*weight_quantizer", "enable": False}]
+        extra.append({"quantizer_name": "*embeddings*weight_quantizer", "enable": False})
+    if bf16_lm_head:
+        extra.append({"quantizer_name": "*lm_head*", "enable": False})
+    cfg["quant_cfg"] = list(cfg["quant_cfg"]) + extra
     return cfg
 
 
@@ -225,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     for fmt in args.formats:
         out = args.out_fp8 if fmt == "fp8" else args.out_nvfp4
         base = load_recipe(FP8_RECIPE if fmt == "fp8" else NVFP4_RECIPE).quantize.model_dump()
-        cfg = fp8_quant_cfg(base, pattern) if fmt == "fp8" else nvfp4_quant_cfg(base, args.bf16_embeddings)
+        cfg = fp8_quant_cfg(base, pattern) if fmt == "fp8" else nvfp4_quant_cfg(base, args.bf16_embeddings, args.bf16_lm_head)
         print(f"== {fmt}: {len(cfg['quant_cfg'])} regole ModelOpt -> {out}", file=sys.stderr)
 
         model, info = AutoModelForCausalLM.from_pretrained(

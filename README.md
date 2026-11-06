@@ -102,8 +102,8 @@ cd ..
 ```bash
 cd ai-pipeline
 
-# Genera model_fp8/ e model_nvfp4/ a partire da model_bf16/ (--bf16-embeddings: con vLLM 0.33 l'NVFP4 si carica solo così, vedi "Note di Esecuzione")
-../.venv-quant/bin/python quantize.py --bf16-embeddings
+# Genera model_fp8/ e model_nvfp4/ a partire da model_bf16/ (--bf16-embeddings e --bf16-lm-head: con vLLM 0.33 l'NVFP4 funziona solo così, vedi "Note di Esecuzione")
+../.venv-quant/bin/python quantize.py --bf16-embeddings --bf16-lm-head
 
 cd ..
 ```
@@ -158,16 +158,21 @@ La quantizzazione è affidata a **NVIDIA Model Optimizer (ModelOpt)**, garantend
 
 | Formato | Ricetta ModelOpt | Dettagli Architetturali |
 |---|---|---|
-| **NVFP4** | `models/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16/ptq/nvfp4_w4a16` | Moduli lineari (`in_proj`, `out_proj`, `up_proj`, `q/k/v/o_proj`) in **NVFP4 W4A4** (incluse attention); layer `down_proj` di 9 blocchi MLP (1, 3, 5, 8, 10, 18, 25, 33, 41) in **FP8 W8A8**; embedding in **NVFP4 W4A16** (in **BF16** con `--bf16-embeddings`, vedi sotto); `lm_head` in **FP8 W8A16**; `conv1d`, LayerNorm e parametri SSM in BF16. KV cache non quantizzata. |
+| **NVFP4** | `models/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16/ptq/nvfp4_w4a16` | Moduli lineari (`in_proj`, `out_proj`, `up_proj`, `q/k/v/o_proj`) in **NVFP4 W4A4** (incluse attention); layer `down_proj` di 9 blocchi MLP (1, 3, 5, 8, 10, 18, 25, 33, 41) in **FP8 W8A8**; embedding in **NVFP4 W4A16** (in **BF16** con `--bf16-embeddings`, vedi sotto); `lm_head` in **FP8 W8A16** (in **BF16** con `--bf16-lm-head`, vedi sotto); `conv1d`, LayerNorm e parametri SSM in BF16. KV cache non quantizzata. |
 | **FP8** | `general/ptq/fp8_default-kv_fp8` + moduli esclusi | FP8 W8A8 per i layer standard e KV cache in FP8. Esclusi in BF16: `lm_head`, `conv1d`, proiezioni Q/K/V/O dei 4 blocchi di attention e proiezioni `in_proj`/`out_proj` Mamba contigue. |
 
 ### Note di Esecuzione e Profilazione della Memoria
 
-- **Embedding in BF16 per vLLM:** vLLM 0.33 non carica l'NVFP4 con gli embedding quantizzati della ricetta NVIDIA: il suo `VocabParallelEmbedding` è sempre non quantizzato (3136 colonne) e fallisce sui pesi impacchettati (1568 colonne) con `RuntimeError: The size of tensor a (3136) must match the size of tensor b (1568)`. `lm_head` in FP8 W8A16 invece è gestito. Per questo il notebook ha `QUANT_BF16_EMBEDDINGS = True`, che tiene la tabella di embedding in BF16 (circa +0,6 GB su disco); da riga di comando:
+- **Embedding in BF16 per vLLM:** vLLM 0.33 non carica l'NVFP4 con gli embedding quantizzati della ricetta NVIDIA: il suo `VocabParallelEmbedding` è sempre non quantizzato (3136 colonne) e fallisce sui pesi impacchettati (1568 colonne) con `RuntimeError: The size of tensor a (3136) must match the size of tensor b (1568)`. Per questo il notebook ha `QUANT_BF16_EMBEDDINGS = True`, che tiene la tabella di embedding in BF16 (circa +0,6 GB su disco); da riga di comando:
   ```bash
   ../.venv-quant/bin/python quantize.py --only nvfp4 --bf16-embeddings
   ```
   Senza il flag `quantize.py` produce la ricetta NVIDIA invariata, utile solo con un vLLM che supporti gli embedding quantizzati.
+- **`lm_head` in BF16 per vLLM:** nel checkpoint della ricetta NVIDIA la `lm_head` è in FP8 W8A16 e si esporta con `weight` e `weight_scale` ma **senza `input_scale`** (gli altri 9 layer FP8, i `down_proj`, ce l'hanno). Il loader ModelOpt di vLLM 0.33.0 legge ogni layer `FP8` come W8A8 statico: registra `input_scale` inizializzato a `torch.finfo(torch.float32).min` e, non trovandolo nel file, lo lascia a quel valore. Il checkpoint si carica ma la misura dava 200 risposte su 200 non valide (JSON mai chiuso, ogni richiesta fermata a `max_tokens`, F1 0,000), mentre l'FP8 (che ha la `lm_head` in BF16) risponde normalmente. Per questo il notebook ha `QUANT_BF16_LM_HEAD = True` (circa +0,4 GB su disco); da riga di comando:
+  ```bash
+  ../.venv-quant/bin/python quantize.py --only nvfp4 --bf16-embeddings --bf16-lm-head
+  ```
+  Senza il flag `quantize.py` produce la ricetta NVIDIA invariata. Il legame fra la `lm_head` e il testo senza senso è la spiegazione che regge dai sorgenti di vLLM, non ancora confermata da una nuova misura dell'NVFP4: aggiornare questa nota con l'esito.
 - **KV Cache FP8:** Abilitabile facoltativamente in fase di serving con `scripts/serve_vllm.sh model_fp8 --kv-cache-dtype fp8`.
 - **Budget VRAM in Training:** Su schede da 16 GB, la configurazione predefinita impiega batch size 1 e gradient accumulation 8 (batch effettivo 8), mantenendo l'allocazione entro ~13-14 GB. Per contesti con limiti più stringenti è possibile limitare la lunghezza del contesto tramite `--max-seq-length 4096`.
 

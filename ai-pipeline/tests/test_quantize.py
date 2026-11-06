@@ -35,6 +35,8 @@ class ArgsTests(unittest.TestCase):
         a = quantize.parse_args([])
         self.assertFalse(a.bf16_embeddings)
         self.assertTrue(quantize.parse_args(["--bf16-embeddings"]).bf16_embeddings)
+        self.assertFalse(a.bf16_lm_head)
+        self.assertTrue(quantize.parse_args(["--bf16-lm-head"]).bf16_lm_head)
 
 
 class Fp8ExclusionTests(unittest.TestCase):
@@ -107,6 +109,24 @@ class QuantConfigTests(unittest.TestCase):
         self.assertEqual(cfg["quant_cfg"][:-1], BASE_NVFP4["quant_cfg"])
         self.assertEqual(cfg["quant_cfg"][-1], {"quantizer_name": "*embeddings*weight_quantizer", "enable": False})
         self.assertEqual(len(BASE_NVFP4["quant_cfg"]), 1, "la base non va modificata")
+
+    def test_bf16_lm_head_is_one_last_rule_that_switches_off_both_lm_head_quantizers(self):
+        cfg = quantize.nvfp4_quant_cfg(BASE_NVFP4, bf16_lm_head=True)
+        self.assertEqual(cfg["quant_cfg"][:-1], BASE_NVFP4["quant_cfg"])
+        rule = cfg["quant_cfg"][-1]
+        self.assertEqual(rule, {"quantizer_name": "*lm_head*", "enable": False})
+        # pesi E attivazioni: la lm_head W8A16 della ricetta esporta un FP8 senza input_scale, che vLLM tratta come W8A8
+        for name in ("lm_head.weight_quantizer", "lm_head.input_quantizer"):
+            self.assertTrue(fnmatch.fnmatchcase(name, rule["quantizer_name"]), name)
+        for other in ("backbone.layers.0.mixer.in_proj.weight_quantizer", "backbone.embeddings.weight_quantizer"):
+            self.assertFalse(fnmatch.fnmatchcase(other, rule["quantizer_name"]), other)
+        self.assertEqual(len(BASE_NVFP4["quant_cfg"]), 1, "la base non va modificata")
+
+    def test_both_bf16_options_add_both_rules_in_order(self):
+        cfg = quantize.nvfp4_quant_cfg(BASE_NVFP4, bf16_embeddings=True, bf16_lm_head=True)
+        self.assertEqual(cfg["quant_cfg"][:-2], BASE_NVFP4["quant_cfg"])
+        self.assertEqual([r["quantizer_name"] for r in cfg["quant_cfg"][-2:]], ["*embeddings*weight_quantizer", "*lm_head*"])
+        self.assertTrue(all(r["enable"] is False for r in cfg["quant_cfg"][-2:]))
 
     def test_modelopt_must_ship_the_4b_recipe(self):
         quantize.check_modelopt_version("0.48.0")
