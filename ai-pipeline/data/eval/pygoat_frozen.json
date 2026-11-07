@@ -1,0 +1,646 @@
+{
+ "repo": "adeyosemanputra/pygoat",
+ "commit": "2aa4cc14f251e4a780e94e200aed6b36a5b15c21",
+ "entries": [
+  {
+   "file": "challenge/labs/bopla_lab/app.py",
+   "line": 75,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"dashboard\"))"
+  },
+  {
+   "file": "challenge/labs/bopla_lab/app.py",
+   "line": 85,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "challenge/labs/bopla_lab/app.py",
+   "line": 140,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"index\"))"
+  },
+  {
+   "file": "challenge/labs/business_logic_lab/app.py",
+   "line": 74,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"cart\"))"
+  },
+  {
+   "file": "challenge/labs/business_logic_lab/app.py",
+   "line": 160,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"cart\"))"
+  },
+  {
+   "file": "challenge/labs/business_logic_lab/app.py",
+   "line": 169,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"store\"))"
+  },
+  {
+   "file": "challenge/labs/business_logic_lab/app.py",
+   "line": 181,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"cart\"))"
+  },
+  {
+   "file": "challenge/labs/security_headers_lab/app.py",
+   "line": 81,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"dashboard\"))"
+  },
+  {
+   "file": "challenge/labs/security_headers_lab/app.py",
+   "line": 91,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"index\"))"
+  },
+  {
+   "file": "challenge/labs/security_headers_lab/app.py",
+   "line": 99,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "challenge/labs/security_headers_lab/app.py",
+   "line": 116,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "challenge/views.py",
+   "line": 38,
+   "callee": "requests.get",
+   "cwe_id": "CWE-918",
+   "expected": "safe",
+   "evidence": "l'URL viene da settings.TRAEFIK_URLS (configurazione), non dall'utente"
+  },
+  {
+   "file": "challenge/views.py",
+   "line": 49,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "challenge/views.py",
+   "line": 66,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "challenge/views.py",
+   "line": 131,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 52,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab1\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 57,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab1\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 62,
+   "callee": "yaml.load",
+   "cwe_id": "CWE-502",
+   "expected": "vulnerable",
+   "evidence": "yaml.load con yaml.Loader sul flusso del file caricato (request.files)"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 67,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab1\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 70,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab1\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 77,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab2\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 84,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab2\"))"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 94,
+   "callee": "ImageMath.eval",
+   "cwe_id": "CWE-94",
+   "expected": "vulnerable",
+   "evidence": "ImageMath.eval valuta 'expression' presa da request.form"
+  },
+  {
+   "file": "dockerized_labs/a9_uckv_lab/app.py",
+   "line": 116,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab2\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 55,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: response = make_response(redirect(url_for(\"dashboard\")))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 71,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 89,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 92,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 103,
+   "callee": "hashlib.md5",
+   "cwe_id": "CWE-327",
+   "expected": "vulnerable",
+   "evidence": "token di reset = md5(email + ora): prevedibile e con hash debole"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 109,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 112,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 126,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/broken_auth_lab/app.py",
+   "line": 140,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/command_injection_lab/app.py",
+   "line": 29,
+   "callee": "subprocess.Popen",
+   "cwe_id": "CWE-78",
+   "expected": "vulnerable",
+   "evidence": "Popen(shell=True) su un comando costruito con f-string da request.form['domain']"
+  },
+  {
+   "file": "dockerized_labs/command_injection_lab/app.py",
+   "line": 49,
+   "callee": "eval",
+   "cwe_id": "CWE-94",
+   "expected": "vulnerable",
+   "evidence": "eval() su request.form['val']"
+  },
+  {
+   "file": "dockerized_labs/crypto_failure_lab/app.py",
+   "line": 25,
+   "callee": "hashlib.sha1",
+   "cwe_id": "CWE-327",
+   "expected": "vulnerable",
+   "evidence": "custom_hash: password con SHA-1 senza sale, usata al login (riga 51)"
+  },
+  {
+   "file": "dockerized_labs/crypto_failure_lab/app.py",
+   "line": 38,
+   "callee": "hashlib.md5",
+   "cwe_id": "CWE-327",
+   "expected": "vulnerable",
+   "evidence": "password confrontata con MD5 senza sale"
+  },
+  {
+   "file": "dockerized_labs/insec_des_lab/main.py",
+   "line": 40,
+   "callee": "pickle.loads",
+   "cwe_id": "CWE-502",
+   "expected": "vulnerable",
+   "evidence": "pickle.loads su base64 preso da request.form['serialized_data']"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 60,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 74,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"register\"))"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 83,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab\"))"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 92,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 97,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "dockerized_labs/insecure_design_lab/app.py",
+   "line": 146,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"login\"))"
+  },
+  {
+   "file": "dockerized_labs/insufficient_logging_lab/app.py",
+   "line": 42,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"lab2\"))"
+  },
+  {
+   "file": "dockerized_labs/sensitive_data_exposure/dataexposure/views.py",
+   "line": 35,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"profile\")"
+  },
+  {
+   "file": "dockerized_labs/sensitive_data_exposure/dataexposure/views.py",
+   "line": 73,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "dockerized_labs/sensitive_data_exposure/dataexposure/views.py",
+   "line": 157,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"index\")"
+  },
+  {
+   "file": "dockerized_labs/software_integrity_lab/app.py",
+   "line": 44,
+   "callee": "pickle.loads",
+   "cwe_id": "CWE-502",
+   "expected": "vulnerable",
+   "evidence": "pickle.loads sul cookie 'token' dopo base64"
+  },
+  {
+   "file": "dockerized_labs/software_integrity_lab/app.py",
+   "line": 70,
+   "callee": "send_from_directory",
+   "cwe_id": "CWE-22",
+   "expected": "safe",
+   "evidence": "send_from_directory confina il nome file nella cartella 'static' (safe_join)"
+  },
+  {
+   "file": "dockerized_labs/sql_injection_lab/app.py",
+   "line": 16,
+   "callee": "c.execute",
+   "cwe_id": "CWE-89",
+   "expected": "safe",
+   "evidence": "CREATE TABLE costante, nessun dato esterno"
+  },
+  {
+   "file": "dockerized_labs/sql_injection_lab/app.py",
+   "line": 25,
+   "callee": "c.execute",
+   "cwe_id": "CWE-89",
+   "expected": "safe",
+   "evidence": "INSERT con segnaposto e valori costanti"
+  },
+  {
+   "file": "dockerized_labs/sql_injection_lab/app.py",
+   "line": 57,
+   "callee": "c.execute",
+   "cwe_id": "CWE-89",
+   "expected": "vulnerable",
+   "evidence": "query costruita con f-string da username e password del form, poi c.execute"
+  },
+  {
+   "file": "dockerized_labs/ssrf_lab/app.py",
+   "line": 37,
+   "callee": "requests.get",
+   "cwe_id": "CWE-918",
+   "expected": "vulnerable",
+   "evidence": "requests.get sull'URL di request.form['url'] senza alcun controllo"
+  },
+  {
+   "file": "dockerized_labs/template_injection_lab/app.py",
+   "line": 102,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(url_for(\"view_blog\", filename=filename))"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 29,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"/\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 58,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 68,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 113,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 124,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 134,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 145,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 160,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 170,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 178,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 192,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 203,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 213,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 223,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 233,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 249,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 261,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 272,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 287,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 297,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 307,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "introduction/views.py",
+   "line": 318,
+   "callee": "redirect",
+   "cwe_id": "CWE-601",
+   "expected": "safe",
+   "evidence": "destinazione costante nel sorgente: return redirect(\"login\")"
+  },
+  {
+   "file": "uninstaller.py",
+   "line": 46,
+   "callee": "subprocess.run",
+   "cwe_id": "CWE-78",
+   "expected": "safe",
+   "evidence": "subprocess.run con lista di argomenti costante (pip_v viene da which())"
+  },
+  {
+   "file": "uninstaller.py",
+   "line": 51,
+   "callee": "subprocess.check_call",
+   "cwe_id": "CWE-78",
+   "expected": "safe",
+   "evidence": "subprocess.check_call con lista costante, senza shell"
+  },
+  {
+   "file": "uninstaller.py",
+   "line": 73,
+   "callee": "subprocess.check_call",
+   "cwe_id": "CWE-78",
+   "expected": "safe",
+   "evidence": "subprocess.check_call con lista costante, senza shell"
+  }
+ ]
+}

@@ -226,7 +226,7 @@ class HardwareRowTests(unittest.TestCase):
 class MockVllm:
     """Server HTTP minimo compatibile con /v1/chat/completions, per testare il client senza GPU."""
 
-    def __init__(self, responder, delay=0.0):
+    def __init__(self, responder, delay=0.0, finish=lambda body, index: "stop"):
         self.requests, self.in_flight, self.max_in_flight = [], 0, 0
         self._lock = threading.Lock()
         outer = self
@@ -244,7 +244,8 @@ class MockVllm:
                     index = len(outer.requests) - 1
                 time.sleep(delay)
                 content = responder(body, index)
-                payload = json.dumps({"choices": [{"message": {"content": content}}], "usage": {"completion_tokens": 7}}).encode()
+                choice = {"message": {"content": content}, "finish_reason": finish(body, index)}
+                payload = json.dumps({"choices": [choice], "usage": {"completion_tokens": 7}}).encode()
                 with outer._lock:
                     outer.in_flight -= 1
                 self.send_response(200)
@@ -278,6 +279,13 @@ class ChatClientTests(unittest.TestCase):
         self.assertEqual(out["content"], '{"vulnerable": true}')
         self.assertEqual(out["completion_tokens"], 7)
         self.assertGreaterEqual(out["latency"], 0)
+
+    def test_chat_completion_returns_finish_reason(self):
+        with MockVllm(lambda b, i: '{"vulnerable": tr', finish=lambda b, i: "length") as m:
+            out = benchmark.chat_completion(m.url, "m", [{"role": "user", "content": "x"}])
+        self.assertEqual(out["finish_reason"], "length")
+        with MockVllm(lambda b, i: "{}") as m:
+            self.assertEqual(benchmark.chat_completion(m.url, "m", [{"role": "user", "content": "x"}])["finish_reason"], "stop")
 
     def test_run_llm_keeps_order_and_respects_concurrency(self):
         with MockVllm(lambda b, i: json.dumps({"vulnerable": b["messages"][0]["content"] == "yes"}), delay=0.05) as m:
@@ -551,6 +559,65 @@ class GraphAccuracyCommandTests(unittest.TestCase):
             self.assertEqual(report["llm-graph"]["pairs"]["both_correct"], 1.0)
             self.assertEqual(report["llm-sink-only"]["pairs"]["both_correct"], 1.0)
             self.assertIn("Coppie", out.with_suffix(".md").read_text(encoding="utf-8"))
+
+
+class FrozenCommandTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.entries = [
+            {"file": "app/views.py", "line": 12, "callee": "redirect", "cwe_id": "CWE-601", "expected": "safe", "evidence": "costante"},
+            {"file": "app/views.py", "line": 30, "callee": "os.system", "cwe_id": "CWE-78", "expected": "vulnerable", "evidence": "input"},
+            {"file": "app/missing.py", "line": 3, "callee": "eval", "cwe_id": "CWE-94", "expected": "vulnerable", "evidence": "x"},
+        ]
+        self.frozen = self.dir / "frozen.json"
+        self.frozen.write_text(json.dumps({"repo": "pygoat", "commit": "abc123", "entries": self.entries}), encoding="utf-8")
+
+    @staticmethod
+    def fake_run_slice(root, targets=None, **kw):
+        records = []
+        for t in targets or []:
+            if "missing" in t["file"]:
+                continue  # il motore non trova il sink
+            code = f"def view(request):\n    {t['callee']}(request.GET['q'])"
+            block = {"file": t["file"], "name": "view", "start_line": t["line"] - 1, "end_line": t["line"], "depth": 0, "lang": "python", "code": code}
+            records.append({"sink": {"function": t["callee"], "file": t["file"], "line": t["line"], "cwe_id": t["cwe_id"]},
+                            "blocks": [block], "truncated": False})
+        return records, ""
+
+    def run_command(self, responder, finish=lambda b, i: "stop"):
+        out = self.dir / "frozen-result.json"
+        with MockVllm(responder, finish=finish) as m, mock.patch.object(benchmark.slice_io, "run_slice", side_effect=self.fake_run_slice), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = benchmark.main(["frozen", "--frozen", str(self.frozen), "--repo", str(self.dir), "--url", m.url, "--model", "m",
+                                   "--depth", "5", "--max-tokens", "300", "--out", str(out)])
+        self.assertEqual(code, 0)
+        return json.loads(out.read_text(encoding="utf-8")), m
+
+    def test_each_entry_gets_its_slice_the_schema_and_a_score(self):
+        def answer(body, index):
+            vulnerable = "Function: os.system" in body["messages"][1]["content"]
+            return json.dumps({"vulnerable": vulnerable, "reasoning": "see CVE-2020-1234" if vulnerable else "constant"})
+
+        score, server = self.run_command(answer)
+        self.assertEqual(len(server.requests), 2, "il sink senza slice non arriva al modello")
+        for body in server.requests:
+            self.assertEqual((body["temperature"], body["max_tokens"]), (0.0, 300))
+            self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
+            self.assertEqual(body["response_format"]["json_schema"]["schema"], common.load_schema())
+        self.assertEqual((score["fp_still_affected"], score["tp_recall"]), (0.0, 0.5))
+        self.assertEqual(score["cve_mentions"], 1)
+        self.assertEqual(score["no_slice"], 1)
+        self.assertEqual(score["truncated_rate"], 0.0)
+
+    def test_a_cut_off_or_invalid_answer_counts_as_truncated(self):
+        """Troncato = JSON non valido oppure `finish_reason == "length"`; il sink senza slice non è una risposta troncata."""
+        def answer(body, index):
+            return '{"vulnerable": tr' if "Function: redirect" in body["messages"][1]["content"] else json.dumps({"vulnerable": True, "reasoning": "r"})
+
+        score, _ = self.run_command(answer, finish=lambda body, index: "length" if "Function: os.system" in body["messages"][1]["content"] else "stop")
+        self.assertEqual(score["truncated_rate"], round(2 / 3, 4))
 
 
 if __name__ == "__main__":

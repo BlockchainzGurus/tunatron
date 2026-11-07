@@ -34,7 +34,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import common
+import eval_frozen
 import graph_examples
+import slice_io
 import vllm_flags
 
 SYSTEMS = ("semgrep", "llm-noslice", "llm-slice", "llm-graph", "llm-sink-only")
@@ -212,6 +214,7 @@ def chat_completion(url: str, model: str, messages: list[dict], max_tokens: int 
         data = json.load(resp)
     return {
         "content": data["choices"][0]["message"]["content"],
+        "finish_reason": data["choices"][0].get("finish_reason"),
         "completion_tokens": int((data.get("usage") or {}).get("completion_tokens", 0)),
         "latency": time.perf_counter() - started,
     }
@@ -542,6 +545,45 @@ def cmd_accuracy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_frozen(args: argparse.Namespace) -> int:
+    """S3/S4: lo stesso prompt del motore (slice a `--depth`, schema JSON, temperatura 0) sui sink della lista congelata di pygoat."""
+    frozen = eval_frozen.load_frozen(args.frozen)
+    targets = [{k: e[k] for k in ("file", "line", "callee", "cwe_id")} for e in frozen["entries"]]
+    records, _stderr = slice_io.run_slice(args.repo, targets, depth=args.depth)
+    by_key = {(r["sink"]["file"], r["sink"]["line"], r["sink"]["function"]): r for r in records}
+    kb = _catalog()
+    slots: list[int | None] = []  # indice nel gruppo di richieste, o None se il motore non ha dato la slice
+    message_sets = []
+    for t in targets:
+        rec = by_key.get((t["file"], t["line"], t["callee"]))
+        if rec is None or rec.get("truncated"):
+            slots.append(None)
+            continue
+        slots.append(len(message_sets))
+        message_sets.append(graph_examples.messages_from_trace({"cwe_id": rec["sink"]["cwe_id"], "sink": rec["sink"], "blocks": rec["blocks"]}, kb))
+    raw = run_llm(args.url, args.model, message_sets, args.concurrency, args.max_tokens)
+    results = []
+    for slot in slots:
+        if slot is None:
+            results.append({"vulnerable": None, "truncated": False, "reasoning": "", "no_slice": True})
+            continue
+        answer = raw[slot]
+        try:
+            reasoning = str(json.loads(answer["content"]).get("reasoning", ""))
+        except (TypeError, ValueError, AttributeError):
+            reasoning = ""
+        verdict = verdict_from_content(answer["content"])
+        results.append({"vulnerable": verdict, "truncated": verdict is None or answer.get("finish_reason") == "length",
+                        "reasoning": reasoning, "no_slice": False})
+    score = eval_frozen.score_frozen(frozen, results)
+    score["no_slice"] = sum(r["no_slice"] for r in results)
+    score.update({"repo": frozen["repo"], "commit": frozen["commit"], "depth": args.depth, "max_tokens": args.max_tokens})
+    print(json.dumps(score, indent=2), file=sys.stderr)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps({**score, "results": results}, indent=2), encoding="utf-8")
+    return 0
+
+
 def cmd_hardware(args: argparse.Namespace) -> int:
     examples = load_examples(args.test, args.samples)
     repos = [l.strip() for l in args.repos.read_text().splitlines() if l.strip()] if args.repos else []
@@ -590,6 +632,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     acc.add_argument("--semgrep-config", default="p/c", help="ruleset Semgrep (richiede rete per scaricarlo)")
     acc.add_argument("--out", type=Path, default=Path("results/accuracy.json"))
     acc.set_defaults(func=cmd_accuracy)
+
+    fr = sub.add_parser("frozen", help="S3/S4: i sink della lista congelata di pygoat (falsi positivi, troncamenti, CVE inventate)")
+    fr.add_argument("--frozen", type=Path, default=Path("data/eval/pygoat_frozen.json"))
+    fr.add_argument("--repo", type=Path, required=True, help="checkout di pygoat al commit della lista")
+    fr.add_argument("--url", default="http://127.0.0.1:8000")
+    fr.add_argument("--model", default="sast-nemotron")
+    fr.add_argument("--depth", type=int, default=5, help="profondità della slice del motore")
+    fr.add_argument("--max-tokens", type=int, default=768)
+    fr.add_argument("--concurrency", type=int, default=4)
+    fr.add_argument("--out", type=Path, default=Path("results/frozen.json"))
+    fr.set_defaults(func=cmd_frozen)
 
     hw = sub.add_parser("hardware", help="5.2 VRAM, tok/s, latenza, F1 per formato")
     hw.add_argument("--models", nargs="+", required=True, metavar="NOME=DIR", help="es. bf16=model_bf16 fp8=model_fp8 nvfp4=model_nvfp4")
