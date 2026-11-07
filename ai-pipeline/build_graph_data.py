@@ -51,9 +51,13 @@ import juliet_graph
 import leak_audit
 import prepare_data
 import slice_io
+import synth_python
 
 SOURCE = "juliet-nist"
 PY_SOURCE = "codeql-python"
+SYNTH_SOURCE = "py-synth"
+# Parole-spia in più per i nomi dei sintetici (i test controllano che il generatore non ne usi).
+SYNTH_EXTRA_PARTS = codeql_graph.PY_EXTRA_PARTS | {"tainted", "clean", "const"}
 DEPTH = 5
 # Le stesse percentuali che `prepare_data.split_of` usa per le altre fonti: default di `--val-pct` e `--holdout-pct`
 # in `prepare_data.py`.
@@ -696,6 +700,127 @@ def build_codeql(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
     return report
 
 
+# --------------------------------------------------------------------------- traccia P3
+REAL_PYTHON_FILES = ("py_codeql_train.jsonl", "py_codeql_val.jsonl", "py_pyvul_train.jsonl", "py_pyvul_val.jsonl")
+
+
+def count_real_python_examples(out_dir: Path) -> int:
+    """Esempi Python con slice veri già scritti in `out_dir` (tracce P1 e P2, train e val): su di essi si misura il tetto di P3."""
+    total = 0
+    for name in REAL_PYTHON_FILES:
+        path = Path(out_dir) / name
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                total += sum(1 for line in fh if line.strip())
+    return total
+
+
+def _internal_audit(examples: list[dict]) -> dict | None:
+    """`_audit` di un quinto dei gruppi (per sha256) contro il resto: le scorciatoie del generatore, prima del tetto."""
+    held = [ex for ex in examples if int(graph_examples._sha(ex["meta"]["group"])[:8], 16) % 5 == 0]
+    rest = [ex for ex in examples if ex not in held]
+    return _audit(rest, held)
+
+
+def build_synth(out_dir: Path, *, n: int = 400, seed: int = 42, engine_bin: Path | None = None, val_pct: int = VAL_PCT,
+                p_callers: float = 0.7, share: float = 0.15, real_examples: int | None = None) -> dict:
+    """Costruisce la traccia P3 (sintetici Python), scrive train e val e restituisce il rapporto (`py_synth_report.json`).
+
+    Genera `n` pacchetti (`synth_python.generate`) in una cartella temporanea, lancia il motore una volta per pacchetto
+    con il solo sink del manifesto come `--targets`, etichetta dal manifesto, ripulisce righe e commenti
+    (`codeql_graph.scrub_record`: i nomi del generatore non hanno parole-spia, quindi nessuna rinomina) e costruisce gli esempi.
+    Gruppo = la coppia di gemelli, divisa fra train e val con `prepare_data.split_of` senza test: i sintetici NON vanno mai
+    nei file di valutazione. Il totale si limita a `share` degli esempi Python con slice veri (`real_examples`, di default
+    quelli già scritti in `out_dir` da P1/P2) con `synth_python.take_groups`: gemelli sempre insieme. Senza esempi veri
+    il tetto è zero e non si lancia il motore.
+    """
+    started = time.monotonic()
+    out_dir = Path(out_dir)
+    kb = common.load_kb()
+    real = count_real_python_examples(out_dir) if real_examples is None else real_examples
+    cap = synth_python.cap_for(real, share)
+    allow = codeql_graph.catalog_leaky_names(kb) | codeql_graph.API_LEAKY_NAMES
+
+    stats: Counter = Counter()
+    built: list[dict] = []
+    if cap > 0:
+        with tempfile.TemporaryDirectory(prefix="synth-") as tmp:
+            manifest = synth_python.generate(Path(tmp), n, seed)
+            for entry in manifest:
+                target = {"file": Path(entry["file"]).name, "line": entry["line"], "callee": entry["callee"], "cwe_id": entry["cwe_id"]}
+                records, _stderr = slice_io.run_slice(Path(tmp) / entry["package"], [target], depth=DEPTH, binary=engine_bin)
+                stats["packages"] += 1
+                if len(records) != 1:
+                    stats["records_missing"] += 1
+                    continue
+                if records[0].get("truncated"):
+                    stats["truncated_dropped"] += 1
+                    continue
+                meta = {"source": SYNTH_SOURCE, "synthetic": True, "track": graph_examples.PY_SYNTH_TRACK,
+                        "group": entry["group"], "chain_len": entry["chain_len"], "synth_kind": entry["kind"]}
+                try:
+                    clean = codeql_graph.scrub_record(records[0], f"{seed}:{entry['group']}")
+                    example = graph_examples.build_example(clean, kb, label=entry["label"],
+                                                           variant_kind="bad" if entry["label"] else "good", origin=None, meta=meta)
+                except ValueError:
+                    stats["build_errors"] += 1
+                    continue
+                if leak_audit.forbidden_hits([example], mode="parts", extra_parts=SYNTH_EXTRA_PARTS, allow=allow):
+                    stats["leaky_dropped"] += 1
+                    continue
+                built.append(example)
+
+    fulls, duplicates = dedupe_examples(built)
+    kept, conflicts = graph_examples.drop_conflicts(fulls)
+    chosen = graph_examples.choose_views(graph_examples.make_candidates(kept, kb), seed, p_callers)
+    capped = synth_python.take_groups(chosen, cap)
+    written = {"train": [], "val": []}
+    for ex in capped:
+        written[prepare_data.split_of(ex["meta"]["group"], seed, val_pct, 0)].append(ex)
+    write_jsonl(out_dir / "py_synth_train.jsonl", written["train"])
+    write_jsonl(out_dir / "py_synth_val.jsonl", written["val"])
+
+    everything = [ex for exs in written.values() for ex in exs]
+    audit = _internal_audit(chosen)
+    report = {
+        "source": SYNTH_SOURCE,
+        "track": graph_examples.PY_SYNTH_TRACK,
+        "seed": seed,
+        "n": n,
+        "depth": DEPTH,
+        "val_pct": val_pct,
+        "p_callers": p_callers,
+        "share": share,
+        "real_python_examples": real,
+        "cap": cap,
+        "packages": stats["packages"],
+        "records_missing": stats["records_missing"],
+        "truncated_dropped": stats["truncated_dropped"],
+        "build_errors": stats["build_errors"],
+        "leaky_dropped": stats["leaky_dropped"],
+        "duplicates_dropped": duplicates,
+        "conflicts_dropped": conflicts,
+        "examples_before_cap": len(chosen),
+        "cap_dropped": len(chosen) - len(capped),
+        "written": {split: len(exs) for split, exs in written.items()},
+        "labels": {str(label): sum(ex["meta"]["label"] == label for ex in everything) for label in (1, 0)},
+        "per_cwe": {cwe: sum(ex["meta"]["cwe"] == cwe for ex in everything) for cwe in sorted({ex["meta"]["cwe"] for ex in everything})},
+        "by_chain_len": {str(k): sum(ex["meta"]["chain_len"] == k for ex in everything) for k in synth_python.CHAIN_LENGTHS},
+        "by_kind": dict(sorted(Counter(ex["meta"]["synth_kind"] for ex in everything).items())),
+        "multi_block_share": round(sum(n_blocks(ex) >= 2 for ex in everything) / len(everything), 4) if everything else 0.0,
+        "sink_only_share": sink_only_share(everything) if everything else None,
+        "forbidden_hits": len(leak_audit.forbidden_hits(everything, mode="parts", extra_parts=SYNTH_EXTRA_PARTS, allow=allow)),
+        "shortcuts_before_cap": audit,
+        "seconds": round(time.monotonic() - started, 1),
+    }
+    if audit and max(audit["stump_accuracies"].values(), default=0.0) > leak_audit.SHORTCUT_LIMIT:
+        print("SHORTCUT WARNING (sintetici): un classificatore a un numero supera "
+              f"{leak_audit.SHORTCUT_LIMIT}: {audit['stump_accuracies']}", file=sys.stderr)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "py_synth_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
 # --------------------------------------------------------------------------- CLI
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -724,7 +849,24 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--val-pct", type=int, default=VAL_PCT, help="come --val-pct di prepare_data.py")
     c.add_argument("--test-pct", type=int, default=TEST_PCT, help="come --holdout-pct di prepare_data.py")
     c.add_argument("--p-callers", type=float, default=0.7, help="quota di slice complete (il resto solo sink dove è decidibile)")
+    sy = sub.add_parser("synth", help="traccia P3: pacchetti Python sintetici a coppie di gemelli (mai nella valutazione)")
+    sy.add_argument("--out-dir", type=Path, default=Path("data/graph"), help="qui si leggono anche py_codeql_* e py_pyvul_* per il tetto")
+    sy.add_argument("--n", type=int, default=400, help="pacchetti da generare (a coppie)")
+    sy.add_argument("--seed", type=int, default=42)
+    sy.add_argument("--engine-bin", type=Path, default=None, help="binario di sast-engine (default: slice_io.engine_bin())")
+    sy.add_argument("--val-pct", type=int, default=VAL_PCT)
+    sy.add_argument("--p-callers", type=float, default=0.7)
+    sy.add_argument("--share", type=float, default=0.15, help="quota massima dei sintetici fra gli esempi Python con slice")
+    sy.add_argument("--real-examples", type=int, default=None, help="esempi Python veri da contare (default: quelli in --out-dir)")
     args = ap.parse_args(argv)
+
+    if args.track == "synth":
+        report = build_synth(args.out_dir, n=args.n, seed=args.seed, engine_bin=args.engine_bin, val_pct=args.val_pct,
+                             p_callers=args.p_callers, share=args.share, real_examples=args.real_examples)
+        keys = ("real_python_examples", "cap", "packages", "examples_before_cap", "written", "labels", "by_chain_len", "by_kind",
+                "multi_block_share", "forbidden_hits")
+        print(json.dumps({k: report[k] for k in keys}, ensure_ascii=False, indent=2))
+        return 0
 
     if args.track == "codeql":
         report = build_codeql(args.raw_dir, args.out_dir, args.eval_dir, seed=args.seed, engine_bin=args.engine_bin,

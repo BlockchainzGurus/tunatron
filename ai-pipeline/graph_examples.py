@@ -33,7 +33,8 @@ VIEWS = ("callers", "sink_only")
 # `"py_pyvul"`. Solo in Juliet un sink `g2b`/`good` ha lo stesso corpo del gemello `bad` (vedi `make_candidates`).
 JULIET_TRACK = "juliet"
 PY_CODEQL_TRACK = "py_codeql"
-PY_TRACKS = frozenset({PY_CODEQL_TRACK, "py_synth", "py_pyvul"})
+PY_SYNTH_TRACK = "py_synth"
+PY_TRACKS = frozenset({PY_CODEQL_TRACK, PY_SYNTH_TRACK, "py_pyvul"})
 NO_FIX = prepare_data.NO_FIX
 
 # --------------------------------------------------------------------------- vocabolario chiuso del reasoning
