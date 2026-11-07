@@ -4,6 +4,9 @@
     # 5.1  Semgrep vs Nemotron senza slicing vs Nemotron con slicing + fine-tuning (vLLM già in esecuzione su :8000)
     python benchmark.py accuracy --test data/test.jsonl --systems semgrep llm-noslice llm-slice
 
+    # 5.1b Il modello con i chiamanti (fino a --depth) contro lo stesso modello con il solo blocco del sink, sulle coppie di Juliet
+    python benchmark.py accuracy --test data/eval/juliet_pairs.jsonl --systems llm-graph llm-sink-only --depth 5
+
     # 5.2  VRAM, tok/s, latenza, F1 per formato (avvia/ferma vLLM da solo, un modello alla volta)
     python benchmark.py hardware --models bf16=model_bf16 fp8=model_fp8 nvfp4=model_nvfp4 --test data/test.jsonl
 
@@ -13,6 +16,7 @@ Solo libreria standard; richiede `semgrep` (accuracy) e `nvidia-smi` + `vllm` (h
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -30,9 +34,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import common
+import graph_examples
 import vllm_flags
 
-SYSTEMS = ("semgrep", "llm-noslice", "llm-slice")
+SYSTEMS = ("semgrep", "llm-noslice", "llm-slice", "llm-graph", "llm-sink-only")
+# Scarto di lunghezza (sul prompt utente) entro cui i due gemelli di una coppia si considerano di lunghezza pari (R19).
+LENGTH_TOLERANCE = 0.15
 NOSLICE_SYSTEM = (
     "You are a SAST security analyzer. You receive the code of a function. Decide whether it contains a security "
     "vulnerability. Answer ONLY with a JSON object that conforms to the requested schema. "
@@ -83,7 +90,50 @@ def evaluate(examples: list[dict], preds: list[bool | None]) -> dict:
     calls = [i for i in everything if examples[i]["meta"].get("sink_kind") == "call"]
     sources = sorted({ex["meta"].get("source", "?") for ex in examples})
     by_source = {src: report([i for i in everything if examples[i]["meta"].get("source", "?") == src]) for src in sources}
-    return {"n": len(examples), "invalid": sum(p is None for p in preds), "all": report(everything), "call_sinks": report(calls), "by_source": by_source}
+    out = {"n": len(examples), "invalid": sum(p is None for p in preds), "all": report(everything), "call_sinks": report(calls), "by_source": by_source}
+    pairs = pair_report(examples, preds)
+    if pairs is not None:
+        out["pairs"] = pairs
+    return out
+
+
+def pair_report(examples: list[dict], preds: list[bool | None]) -> dict | None:
+    """S1 sulle coppie (stesso prompt «solo sink», etichette opposte, `meta.pair_id`): None se non ce ne sono.
+
+    Si contano solo le coppie complete (un vulnerabile e un sicuro con lo stesso `pair_id`); un output non valido è «non
+    vulnerabile». `accuracy` = esempi giusti / esempi accoppiati, `both_correct` = coppie con entrambi giusti / coppie.
+    Per non leggere S1 come prova di ragionamento sul flusso (R19) si riportano anche le coppie a lunghezza controllata
+    (il prompt utente dei due gemelli differisce al più del `LENGTH_TOLERANCE`) e la base «il più lungo è il vulnerabile»:
+    la quota delle coppie di lunghezza diversa in cui lo è, cioè quanto otterrebbe chi guarda solo la lunghezza.
+    """
+    groups: dict[str, list[int]] = {}
+    for i, ex in enumerate(examples):
+        pid = (ex.get("meta") or {}).get("pair_id")
+        if pid:
+            groups.setdefault(pid, []).append(i)
+    pairs = [idx for idx in groups.values() if len(idx) == 2 and {examples[i]["meta"]["label"] for i in idx} == {0, 1}]
+    if not pairs:
+        return None
+
+    def right(i: int) -> bool:
+        return bool(preds[i]) == bool(examples[i]["meta"]["label"])
+
+    def summary(subset: list[list[int]]) -> dict:
+        n = len(subset)
+        return {"pairs": n, "accuracy": round(sum(right(i) for p in subset for i in p) / (2 * n), 4) if n else 0.0,
+                "both_correct": round(sum(all(right(i) for i in p) for p in subset) / n, 4) if n else 0.0}
+
+    size = {i: len(user_message(examples[i])) for p in pairs for i in p}
+    gap = lambda p: abs(size[p[0]] - size[p[1]]) / max(size[p[0]], size[p[1]], 1)  # noqa: E731
+    controlled = [p for p in pairs if gap(p) <= LENGTH_TOLERANCE]
+    different = [p for p in pairs if size[p[0]] != size[p[1]]]
+    longer_is_vulnerable = sum(size[next(i for i in p if examples[i]["meta"]["label"] == 1)] > size[next(i for i in p if examples[i]["meta"]["label"] == 0)]
+                               for p in different)
+    return {**summary(pairs),
+            "length_controlled": {**summary(controlled), "tolerance": LENGTH_TOLERANCE,
+                                  "identical_length": sum(size[p[0]] == size[p[1]] for p in controlled)},
+            "longer_is_vulnerable": {"pairs_with_different_length": len(different),
+                                     "share": round(longer_is_vulnerable / len(different), 4) if different else 0.0}}
 
 
 # --------------------------------------------------------------------------- prompt e verdetti
@@ -104,14 +154,37 @@ def extract_code(user_text: str) -> str:
 
 
 def noslice_messages(example: dict) -> list[dict]:
-    """Prompt senza regola CWE, senza sink e senza traccia: solo la funzione."""
-    code = extract_code(user_message(example))
-    lang = example.get("meta", {}).get("lang", "c")
-    return [{"role": "system", "content": NOSLICE_SYSTEM}, {"role": "user", "content": NOSLICE_USER.format(lang=lang, code=code)}]
+    """Prompt senza regola CWE, senza sink e senza traccia: solo la funzione.
+
+    Con `meta.trace` (esempi con slice) la funzione è il blocco a profondità 0: il primo blocco del prompt sarebbe il chiamante
+    più esterno, non il sink.
+    """
+    meta = example.get("meta", {})
+    sink_block = next((b for b in (meta.get("trace") or {}).get("blocks", []) if b["depth"] == 0), None)
+    code = sink_block["code"] if sink_block else extract_code(user_message(example))
+    return [{"role": "system", "content": NOSLICE_SYSTEM}, {"role": "user", "content": NOSLICE_USER.format(lang=meta.get("lang", "c"), code=code)}]
 
 
 def slice_messages(example: dict) -> list[dict]:
     return [m for m in example["messages"] if m["role"] in ("system", "user")]
+
+
+@functools.lru_cache(maxsize=1)
+def _catalog() -> dict:
+    return common.load_kb()
+
+
+def rerender_messages(example: dict, max_depth: int | None = None, sink_only: bool = False, kb: dict | None = None) -> list[dict]:
+    """System e user rifatti da `meta.trace`: i blocchi fino a `max_depth`, o il solo blocco a profondità 0 con `sink_only`.
+
+    Delega a `graph_examples.messages_from_trace` (lo stesso codice che costruisce gli esempi, R6c), così il prompt «solo
+    sink» di un esempio completo è per costruzione quello dell'esempio costruito solo-sink. Senza `meta.trace` (esempi delle
+    fonti senza slice) restituisce i messaggi salvati.
+    """
+    trace = (example.get("meta") or {}).get("trace")
+    if not trace:
+        return slice_messages(example)
+    return graph_examples.messages_from_trace(trace, kb or _catalog(), max_depth=max_depth, sink_only=sink_only)
 
 
 def verdict_from_content(content) -> bool | None:
@@ -272,6 +345,20 @@ def accuracy_table(results: dict[str, dict]) -> str:
         for m, label in rows:
             n = sum(m["counts"].values())
             lines.append(f"| {name} | {label} | {n} | {m['precision']:.3f} | {m['recall']:.3f} | {m['f1']:.3f} | {m['fpr']:.3f} | {rep['invalid']} |")
+    return "\n".join(lines)
+
+
+def pairs_table(results: dict[str, dict]) -> str:
+    """Una riga per sistema con le coppie S1 (stringa vuota se nessun sistema ne ha)."""
+    rows = [(name, rep["pairs"]) for name, rep in results.items() if "pairs" in rep]
+    if not rows:
+        return ""
+    head = ["Sistema", "Coppie", "Accuratezza", "Entrambe giuste", "Coppie a lunghezza controllata", "Entrambe giuste (lunghezza controllata)",
+            "Base «il più lungo è vulnerabile»"]
+    lines = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
+    for name, p in rows:
+        c, b = p["length_controlled"], p["longer_is_vulnerable"]
+        lines.append(f"| {name} | {p['pairs']} | {p['accuracy']:.3f} | {p['both_correct']:.3f} | {c['pairs']} | {c['both_correct']:.3f} | {b['share']:.3f} |")
     return "\n".join(lines)
 
 
@@ -437,12 +524,17 @@ def cmd_accuracy(args: argparse.Namespace) -> int:
         if system == "semgrep":
             preds: list[bool | None] = run_semgrep(examples, args.semgrep_config)
         else:
-            build = noslice_messages if system == "llm-noslice" else slice_messages
+            build = {"llm-noslice": noslice_messages, "llm-slice": slice_messages,
+                     "llm-graph": lambda ex: rerender_messages(ex, args.depth),
+                     "llm-sink-only": lambda ex: rerender_messages(ex, sink_only=True)}[system]
             raw = run_llm(args.url, args.model, [build(ex) for ex in examples], args.concurrency)
             preds = [verdict_from_content(r["content"]) for r in raw]
         results[system] = evaluate(examples, preds)
         print(f"{system}: F1={results[system]['all']['f1']:.3f}", file=sys.stderr)
     table = accuracy_table(results)
+    pairs = pairs_table(results)
+    if pairs:
+        table += "\n\n" + pairs
     print(table)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=2), encoding="utf-8")
@@ -493,6 +585,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     acc.add_argument("--url", default="http://127.0.0.1:8000")
     acc.add_argument("--model", default="sast-nemotron")
     acc.add_argument("--concurrency", type=int, default=4)
+    acc.add_argument("--depth", type=int, default=None, help="llm-graph: profondità massima dei blocchi mostrati (default: tutti)")
     acc.add_argument("--limit", type=int, default=0, help="usa solo i primi N esempi (0 = tutti)")
     acc.add_argument("--semgrep-config", default="p/c", help="ruleset Semgrep (richiede rete per scaricarlo)")
     acc.add_argument("--out", type=Path, default=Path("results/accuracy.json"))

@@ -1,5 +1,8 @@
 """Test delle parti pure di benchmark.py + client HTTP verso un finto server vLLM (stdlib)."""
+import contextlib
+import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -8,9 +11,11 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 import benchmark
 import common
+import graph_examples
 
 
 class MetricsTests(unittest.TestCase):
@@ -409,6 +414,143 @@ class VllmEnvTests(unittest.TestCase):
                 proc = benchmark.start_vllm(str(fake_vllm), model, 8000, 0.8, log)
                 proc.wait(timeout=30)
             self.assertEqual(log_path.read_text().strip(), str(fake_ninja))
+
+
+HEADER = re.compile(r"^### .*depth (\d+)\)$", re.M)
+KB = common.load_kb()
+
+
+def graph_block(depth: int, code: str | None = None) -> dict:
+    name = f"fn_{depth}{depth}{depth}{depth}{depth}{depth}"
+    code = code or f"void {name}(char * data)\n{{\n    use(data);\n}}"
+    return {"file": "src/0a1b2c3d.c", "name": name, "start_line": 100 * (5 - depth), "end_line": 100 * (5 - depth) + code.count("\n"),
+            "depth": depth, "lang": "c", "code": code}
+
+
+def graph_example(n_blocks: int = 5, label: int = 1, pair_id: str | None = None, pad: int = 0) -> dict:
+    """Esempio con una catena di `n_blocks` blocchi; `pad` righe di commento in più nel chiamante più esterno."""
+    blocks = [graph_block(d) for d in range(n_blocks - 1, 0, -1)]
+    blocks.append(graph_block(0, "void fn_000000(char * data)\n{\n    system(data);\n}"))
+    if pad:
+        blocks[0]["code"] += "\n" + "\n".join(f"// padding {i}" for i in range(pad))
+    rec = {"sink": {"function": "system", "file": "src/0a1b2c3d.c", "line": blocks[-1]["start_line"] + 2, "cwe_id": "CWE-78"},
+           "blocks": blocks, "truncated": False}
+    ex = graph_examples.build_example(rec, KB, label=label, variant_kind="bad" if label else "g2b", origin=None,
+                                      meta={"source": "juliet-nist", "synthetic": False, "track": "juliet", "group": "g"})
+    ex["meta"]["pair_id"] = pair_id
+    return ex
+
+
+def headers(messages: list[dict]) -> list[int]:
+    return [int(d) for d in HEADER.findall(messages[1]["content"])]
+
+
+class GraphSystemsTests(unittest.TestCase):
+    def test_sink_only_prompt_has_exactly_one_block_header(self):
+        msgs = benchmark.rerender_messages(graph_example(), sink_only=True)
+        self.assertEqual([m["role"] for m in msgs], ["system", "user"])
+        self.assertEqual(headers(msgs), [0])
+        self.assertIn("system(data);", msgs[1]["content"])
+        self.assertNotIn("use(data);", msgs[1]["content"])
+
+    def test_max_depth_filters_blocks(self):
+        ex = graph_example()
+        self.assertEqual(headers(benchmark.rerender_messages(ex, max_depth=1)), [1, 0])
+        self.assertEqual(headers(benchmark.rerender_messages(ex, max_depth=0)), [0])
+        self.assertEqual(headers(benchmark.rerender_messages(ex)), [4, 3, 2, 1, 0])
+
+    def test_full_rerender_equals_the_stored_prompt(self):
+        ex = graph_example()
+        self.assertEqual(benchmark.rerender_messages(ex), benchmark.slice_messages(ex))
+
+    def test_example_without_trace_falls_back_to_stored_messages(self):
+        legacy = {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "{}"}],
+                  "meta": {"label": 1}}
+        for kwargs in ({}, {"max_depth": 1}, {"sink_only": True}):
+            self.assertEqual(benchmark.rerender_messages(legacy, **kwargs), benchmark.slice_messages(legacy))
+
+    def test_rerendered_sink_only_prompt_is_the_builder_sink_only_prompt(self):
+        """R6b: la premessa di S1 («lo stesso prompt solo-sink») vale per costruzione, non per due implementazioni parallele."""
+        ex = graph_example()
+        trace = ex["meta"]["trace"]
+        built = graph_examples.build_example({"sink": trace["sink"], "blocks": trace["blocks"], "truncated": False}, KB, label=1,
+                                             variant_kind="bad", origin=None, meta={"source": "x", "synthetic": False}, view="sink_only")
+        self.assertEqual(benchmark.rerender_messages(ex, sink_only=True)[1]["content"], built["messages"][1]["content"])
+
+    def test_noslice_prompt_of_a_graph_example_uses_the_sink_block_not_the_outermost_caller(self):
+        user = benchmark.noslice_messages(graph_example())[1]["content"]
+        self.assertIn("system(data);", user)
+        self.assertNotIn("use(data);", user)
+
+    def test_pair_report_accuracy_and_both_correct(self):
+        examples = [graph_example(2, 1, "p1"), graph_example(2, 0, "p1"), graph_example(2, 1, "p2"), graph_example(2, 0, "p2")]
+        report = benchmark.pair_report(examples, [True, False, True, True])
+        self.assertEqual(report["pairs"], 2)
+        self.assertEqual(report["accuracy"], 0.75)
+        self.assertEqual(report["both_correct"], 0.5)
+
+    def test_pair_report_is_none_without_pairs(self):
+        self.assertIsNone(benchmark.pair_report([graph_example(2, 1), graph_example(2, 0)], [True, False]))
+
+    def test_pair_report_ignores_incomplete_pairs_and_counts_invalid_outputs_as_not_vulnerable(self):
+        examples = [graph_example(2, 1, "p1"), graph_example(2, 0, "p1"), graph_example(2, 1, "lonely")]
+        report = benchmark.pair_report(examples, [None, False, True])
+        self.assertEqual((report["pairs"], report["accuracy"], report["both_correct"]), (1, 0.5, 0.0))
+
+    def test_pair_report_separates_length_from_flow_reasoning(self):
+        """R19: sui gemelli di Juliet il vulnerabile è quasi sempre il più lungo; S1 va letto anche a lunghezza controllata."""
+        examples = [graph_example(2, 1, "long", pad=40), graph_example(2, 0, "long"),      # vulnerabile molto più lungo
+                    graph_example(2, 1, "close", pad=1), graph_example(2, 0, "close"),      # lunghezze vicine (entro il 15%)
+                    graph_example(2, 1, "inverse"), graph_example(2, 0, "inverse", pad=40)]  # sicuro più lungo
+        report = benchmark.pair_report(examples, [True, False] * 3)
+        self.assertEqual(report["pairs"], 3)
+        controlled = report["length_controlled"]
+        self.assertEqual((controlled["pairs"], controlled["both_correct"]), (1, 1.0))
+        baseline = report["longer_is_vulnerable"]
+        self.assertEqual((baseline["pairs_with_different_length"], baseline["share"]), (3, round(2 / 3, 4)))
+
+    def test_evaluate_adds_pairs_only_when_the_examples_have_pair_ids(self):
+        paired = [graph_example(2, 1, "p"), graph_example(2, 0, "p")]
+        self.assertEqual(benchmark.evaluate(paired, [True, False])["pairs"]["pairs"], 1)
+        self.assertNotIn("pairs", benchmark.evaluate([graph_example(2, 1), graph_example(2, 0)], [True, False]))
+
+    def test_pairs_table_has_one_row_per_system_with_pairs(self):
+        paired = [graph_example(2, 1, "p"), graph_example(2, 0, "p")]
+        results = {"llm-graph": benchmark.evaluate(paired, [True, False]), "semgrep": benchmark.evaluate([graph_example()], [True])}
+        table = benchmark.pairs_table(results)
+        self.assertIn("llm-graph", table)
+        self.assertNotIn("semgrep", table)
+
+
+class GraphAccuracyCommandTests(unittest.TestCase):
+    def test_parser_accepts_the_new_systems_and_depth(self):
+        args = benchmark.parse_args(["accuracy", "--systems", "llm-graph", "llm-sink-only", "--depth", "3"])
+        self.assertEqual((args.systems, args.depth), (["llm-graph", "llm-sink-only"], 3))
+        self.assertIsNone(benchmark.parse_args(["accuracy"]).depth)
+        self.assertLessEqual({"llm-graph", "llm-sink-only"}, set(benchmark.SYSTEMS))
+
+    def test_each_system_gets_its_own_prompt_and_the_report_has_pairs(self):
+        examples = [graph_example(4, 1, "p"), graph_example(4, 0, "p")]
+        with tempfile.TemporaryDirectory() as d:
+            test = Path(d) / "pairs.jsonl"
+            test.write_text("".join(json.dumps(e) + "\n" for e in examples), encoding="utf-8")
+            seen = {}
+
+            def fake_run_llm(url, model, message_sets, concurrency, max_tokens=768):
+                seen[len(seen)] = [headers(m) for m in message_sets]
+                return [{"content": json.dumps({"vulnerable": i % 2 == 0})} for i, _ in enumerate(message_sets)]
+
+            out = Path(d) / "r.json"
+            argv = ["accuracy", "--test", str(test), "--systems", "llm-graph", "llm-sink-only", "--depth", "1", "--out", str(out)]
+            with mock.patch.object(benchmark, "run_llm", side_effect=fake_run_llm), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(benchmark.main(argv), 0)
+            self.assertEqual(seen[0], [[1, 0], [1, 0]], "llm-graph: profondità fino a --depth")
+            self.assertEqual(seen[1], [[0], [0]], "llm-sink-only: solo il blocco del sink")
+            report = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(report["llm-graph"]["pairs"]["both_correct"], 1.0)
+            self.assertEqual(report["llm-sink-only"]["pairs"]["both_correct"], 1.0)
+            self.assertIn("Coppie", out.with_suffix(".md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
