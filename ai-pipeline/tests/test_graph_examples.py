@@ -290,6 +290,13 @@ class BuildExampleTests(unittest.TestCase):
             self.assertEqual(common.validate_finding(finding(ex)), [])
         self.assertIn("comes from", finding(example(chain(3), 1))["reasoning"], "Juliet tiene la sua frase")
 
+    def test_generic_safe_reason_covers_safe_api_use_and_not_only_constants_and_checks(self):
+        """R33: nelle fix reali (P2) il lato corretto è spesso una query con parametri o una chiamata senza shell: «costante o
+        controllato» sarebbe falso; la frase deve dire anche questo senza nominare un solo meccanismo."""
+        for word in ("constant", "validated", "cannot be abused"):
+            self.assertIn(word, GENERIC[0])
+        self.assertIsNone(LEAK_RE.search(GENERIC[0]))
+
     def test_python_tracks_keep_the_single_block_and_sink_only_forms(self):
         meta = {**META, "track": graph_examples.PY_CODEQL_TRACK}
         single = finding(example(chain(1, callee="os.system", lang="python"), 0, "good", origin=None, meta=meta))["reasoning"]

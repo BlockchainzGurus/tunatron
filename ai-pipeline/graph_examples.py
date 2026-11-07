@@ -34,7 +34,8 @@ VIEWS = ("callers", "sink_only")
 JULIET_TRACK = "juliet"
 PY_CODEQL_TRACK = "py_codeql"
 PY_SYNTH_TRACK = "py_synth"
-PY_TRACKS = frozenset({PY_CODEQL_TRACK, PY_SYNTH_TRACK, "py_pyvul"})
+PY_PYVUL_TRACK = "py_pyvul"
+PY_TRACKS = frozenset({PY_CODEQL_TRACK, PY_SYNTH_TRACK, PY_PYVUL_TRACK})
 NO_FIX = prepare_data.NO_FIX
 
 # --------------------------------------------------------------------------- vocabolario chiuso del reasoning
@@ -69,7 +70,7 @@ PHRASES: dict[tuple[str, str], str] = {
 # Motivo per ogni CWE fuori da `PHRASES` (tracce Python), per etichetta.
 GENERIC: dict[int, str] = {
     1: "untrusted data reaches the sink without validation or sanitization",
-    0: "the value reaching the sink is constant or is checked before use",
+    0: "the value reaching the sink is constant, validated before use, or handed to the sink in a way that cannot be abused",
 }
 
 # Origine del dato dal `source_token` del NOME DEL FILE Juliet (`juliet_graph.source_token`), come frase completa (nessuna
