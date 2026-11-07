@@ -88,7 +88,7 @@ python3 prepare_data.py --download --test-benign-ratio 3
 # Esempi con slice reali del grafo (Juliet C, test CodeQL Python, pilota CVEfixes/PyVul, sintetici Python):
 # vedi "Dati con slice reali" sotto. Il motore va compilato (cargo build --release) e i comandi girano sotto un tetto di memoria.
 # python3 build_graph_data.py juliet --max-train 1080 && python3 build_graph_data.py codeql
-# python3 pyvul_pilot.py --parquet data/raw/cvefixes_pyvul.parquet --repos 20 --work-dir outputs/pyvul-pilot
+# uv run --no-project --with pyarrow python pyvul_pilot.py --parquet data/raw/cvefixes_pyvul.parquet --repos 20 --work-dir outputs/pyvul-pilot
 # python3 build_graph_data.py synth     # per ultimo: il tetto dipende dagli esempi Python veri già scritti
 # python3 prepare_data.py ... --graph-dir data/graph --out-dir data
 
