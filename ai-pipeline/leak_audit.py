@@ -31,6 +31,8 @@ from c_anonymize import LEAK_RE, leaky_identifier
 STRUCTURE_LIMIT = 0.65
 MODES = ("substring", "parts")
 SINK_MARKER = "## Candidate sink"
+# Dal marcatore in poi il prompt è il template costante «Decide whether the sink … is vulnerable to …», uguale per i due verdetti.
+TASK_MARKER = "## Task"
 # Soglia oltre la quale una caratteristica a buon mercato si segnala (senza far fallire il cancello).
 SHORTCUT_LIMIT = 0.65
 STUMP_FEATURES = ("prompt_chars", "code_chars", "code_lines", "braces", "numbers", "n_blocks", "max_depth",
@@ -64,13 +66,16 @@ def _tokens(example: dict) -> list[str]:
 
 # --------------------------------------------------------------------------- parole-spia
 def _prompt_tail(example: dict) -> str:
-    """Prompt utente reso dal marcatore `## Candidate sink` in poi (codice, intestazioni e file come li vede il modello).
+    """Prompt utente reso dal marcatore `## Candidate sink` fino a `## Task` (codice, intestazioni e file come li vede il modello).
 
-    La scheda della CWE sopra il marcatore è costante e resta fuori. Senza marcatore si guarda tutto il prompt.
+    La scheda della CWE sopra il marcatore e l'istruzione `## Task` in fondo sono template costante e restano fuori:
+    la seconda dice «is vulnerable to …» per entrambi i verdetti. Senza marcatore si guarda tutto il prompt.
     """
     user = next((m["content"] for m in example.get("messages", []) if m.get("role") == "user"), "")
     at = user.find(SINK_MARKER)
-    return user[at:] if at >= 0 else user
+    tail = user[at:] if at >= 0 else user
+    end = tail.find(TASK_MARKER)
+    return tail[:end] if end >= 0 else tail
 
 
 def _reasoning_text(example: dict) -> str:
@@ -82,14 +87,16 @@ def _reasoning_text(example: dict) -> str:
         return content
 
 
-def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: frozenset[str] = frozenset()) -> list[str]:
+def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: frozenset[str] = frozenset(),
+                   allow: frozenset[str] = frozenset()) -> list[str]:
     """Parole-spia in `meta.trace`, nel prompt reso dopo `## Candidate sink` e nel `reasoning` del target.
 
     Nella traccia si guardano `code`, `file`, `name` di ogni blocco e `file`/`function` del sink. `"substring"` cerca
     `LEAK_RE` ovunque (il C anonimizzato di Juliet non deve contenerne nemmeno dentro una parola); `"parts"` controlla
     gli identificatori con `leaky_identifier(…, extra_parts)`, per il codice Python vero, dove `prefix` o `fixture` non
-    sono perdite. Ogni occorrenza è `"esempio <i> <dove>: <parola>"` (`blocco <j> <campo>`, `sink <campo>`, `prompt`,
-    `reasoning`).
+    sono perdite. `allow` (solo in modo `parts`) esenta identificatori interi, per esempio i nomi dei sink del catalogo
+    che contengono una parola-spia (`mark_safe`, `unsafe_load`): sono vocabolario del catalogo, non un difetto del test.
+    Ogni occorrenza è `"esempio <i> <dove>: <parola>"` (`blocco <j> <campo>`, `sink <campo>`, `prompt`, `reasoning`).
     """
     if mode not in MODES:
         raise ValueError(f"modo sconosciuto: {mode!r} (attesi {MODES})")
@@ -99,7 +106,7 @@ def forbidden_hits(examples: list[dict], mode: str = "substring", extra_parts: f
         if mode == "substring":
             found = _LEAK_WORD_RE.findall(text)
         else:
-            found = [w for w in _IDENT_RE.findall(text) if leaky_identifier(w, extra_parts)]
+            found = [w for w in _IDENT_RE.findall(text) if w not in allow and leaky_identifier(w, extra_parts)]
         hits.extend(f"{where}: {w}" for w in dict.fromkeys(found))
 
     for i, ex in enumerate(examples):

@@ -63,6 +63,25 @@ class ForbiddenHitsTests(unittest.TestCase):
         bad = example(1, "system(data);", ["def fn_c1c1c1(bad_value):\n    return bad_value"])
         self.assertTrue(leak_audit.forbidden_hits([bad], mode="parts"))
 
+    def test_the_constant_task_instruction_is_not_scanned(self):
+        """«Decide whether the sink … is vulnerable to …» è il template, uguale per i due verdetti: non è una perdita."""
+        ex = example(1, "system(data);")
+        self.assertIn("vulnerable", ex["messages"][1]["content"].split("## Task", 1)[1])
+        self.assertEqual(leak_audit.forbidden_hits([ex], mode="parts", extra_parts=frozenset({"vulnerable"})), [])
+        ex["messages"][1]["content"] = ex["messages"][1]["content"].replace("## Task", "a vulnerable twin\n\n## Task")
+        self.assertTrue(any("vulnerable" in h and "prompt" in h for h in leak_audit.forbidden_hits(
+            [ex], mode="parts", extra_parts=frozenset({"vulnerable"}))), "ciò che sta prima di `## Task` si controlla")
+
+    def test_allow_exempts_named_catalog_identifiers_but_nothing_else(self):
+        """R24: `mark_safe`/`yaml.unsafe_load` sono sink del catalogo (vocabolario, non un difetto del test): `allow` li esenta."""
+        ex = example(1, "mark_safe(data)", ["def fn_c1c1c1(unsafe_value):\n    return unsafe_value"])
+        words = frozenset({"safe", "unsafe"})
+        hits = leak_audit.forbidden_hits([ex], mode="parts", extra_parts=words)
+        self.assertTrue(any("mark_safe" in h for h in hits), hits)
+        allowed = leak_audit.forbidden_hits([ex], mode="parts", extra_parts=words, allow=frozenset({"mark_safe"}))
+        self.assertFalse(any("mark_safe" in h for h in allowed), allowed)
+        self.assertTrue(any("unsafe_value" in h for h in allowed), "gli altri identificatori restano controllati")
+
     def test_forbidden_hits_scans_trace_prompt_tail_and_reasoning(self):
         """F4: la parola-spia si trova in ciascuno dei tre posti; la scheda prima di `## Candidate sink` non conta."""
         clean = example(1, "system(data);")

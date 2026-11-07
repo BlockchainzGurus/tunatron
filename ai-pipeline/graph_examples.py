@@ -32,6 +32,8 @@ VIEWS = ("callers", "sink_only")
 # Valore di `meta.track` per gli esempi Juliet (lo passa Task 6); le tracce Python passano `"py_codeql"`, `"py_synth"`,
 # `"py_pyvul"`. Solo in Juliet un sink `g2b`/`good` ha lo stesso corpo del gemello `bad` (vedi `make_candidates`).
 JULIET_TRACK = "juliet"
+PY_CODEQL_TRACK = "py_codeql"
+PY_TRACKS = frozenset({PY_CODEQL_TRACK, "py_synth", "py_pyvul"})
 NO_FIX = prepare_data.NO_FIX
 
 # --------------------------------------------------------------------------- vocabolario chiuso del reasoning
@@ -117,6 +119,10 @@ SINK_ONLY_REASONING = "`{sink}` in `{fn}` (depth 0, only block shown): the origi
 # sorgente del dato sta nella funzione stessa, quindi si dice da dove viene (`_origin_clause`) invece di «non visibile» (R15).
 NO_CALLERS_REASONING = "`{sink}` in `{fn}` (depth 0, no callers in the slice): {origin}; {reason}."
 
+# Tracce Python con chiamanti (R24): niente «i dati vengono da <radice>», che per un sink con argomento costante ma con dei
+# chiamanti sarebbe falso; si dice solo come si arriva al sink lungo la catena mostrata, poi il motivo del verdetto.
+CHAIN_REASONING = "`{sink}` in `{fn}` is reached through the call chain from `{root}` (depth {depth}): {reason}."
+
 # Chiavi di `meta` calcolate qui: chi chiama passa solo le altre (`source`, `synthetic`, `track`, `group`, `variant`…).
 _COMPUTED = frozenset({"label", "kind", "cwe", "lang", "sink_function", "sink_line", "sink_kind", "func_hash", "view",
                        "variant_kind", "origin", "pair_id", "trace"})
@@ -197,21 +203,26 @@ def _origin_clause(cwe_id: str, variant_kind: str, origin: str | None) -> str:
 
 
 def _reasoning(cwe_id: str, label: int, variant_kind: str, origin: str | None, sink_function: str, shown: list[dict],
-               trace_blocks: int) -> str:
+               trace_blocks: int, track: str | None = None) -> str:
     """Sink, funzione del blocco mostrato più profondo (il primo, a parità) con la sua profondità, origine e motivo.
 
     Se la traccia ha un solo blocco (nessun chiamante, qualunque view) si usa `NO_CALLERS_REASONING`, con l'origine nel
     blocco; se ha chiamanti ma il prompt mostra solo il blocco a profondità 0 si usa `SINK_ONLY_REASONING`: nessuna
-    affermazione su blocchi non mostrati.
+    affermazione su blocchi non mostrati. Con chiamanti mostrati, le tracce Python (`PY_TRACKS`) usano
+    `CHAIN_REASONING`, che non afferma da dove viene il dato.
     """
     sink_block = _sink_block(shown)
-    reason = PHRASES.get((cwe_id, variant_kind), GENERIC[label])
+    # `PHRASES` descrive le varianti di Juliet; per Python vale sempre il motivo generico (R24b): «nessun dato esterno» sarebbe
+    # falso per un flusso sanificato.
+    reason = GENERIC[label] if track in PY_TRACKS else PHRASES.get((cwe_id, variant_kind), GENERIC[label])
     if trace_blocks == 1:
         return NO_CALLERS_REASONING.format(sink=sink_function, fn=sink_block["name"],
                                            origin=_origin_clause(cwe_id, variant_kind, origin), reason=reason)
     if len(shown) == 1:
         return SINK_ONLY_REASONING.format(sink=sink_function, fn=sink_block["name"], reason=reason)
     root = max(shown, key=lambda b: b["depth"])
+    if track in PY_TRACKS:
+        return CHAIN_REASONING.format(sink=sink_function, fn=sink_block["name"], root=root["name"], depth=root["depth"], reason=reason)
     return (f"`{sink_function}` in `{sink_block['name']}` receives data that comes from `{root['name']}` "
             f"(depth {root['depth']}): {_origin_clause(cwe_id, variant_kind, origin)}; {reason}.")
 
@@ -257,7 +268,8 @@ def build_example(rec: dict, kb: dict, *, label: int, variant_kind: str, origin:
         "sink_file": sink["file"],
         "sink_line": sink["line"],
         "vex_status": "affected" if vulnerable else "not_affected",
-        "reasoning": _reasoning(cwe_id, label, variant_kind, origin, sink["function"], shown, len(trace["blocks"])),
+        "reasoning": _reasoning(cwe_id, label, variant_kind, origin, sink["function"], shown, len(trace["blocks"]),
+                                meta.get("track")),
         "suggested_fix": entry["fix_hint"] if vulnerable else NO_FIX,
     }
     messages.append({"role": "assistant", "content": json.dumps(finding, ensure_ascii=False)})

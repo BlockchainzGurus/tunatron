@@ -17,9 +17,17 @@ esempi di chat con i chiamanti reali calcolati da `sast-engine slice`:
 6. scrive `juliet_train.jsonl`, `juliet_val.jsonl`, `juliet_report.json` in `--out-dir` e `juliet_test.jsonl`,
    `juliet_unseen_variants.jsonl`, `juliet_pairs.jsonl` in `--eval-dir`.
 
+Sottocomando `codeql` (traccia P1): i test CodeQL Python di `data/raw/codeql-tests` con le slice del motore (una radice
+per directory di query) e l'etichetta dai `$ Alert` (`codeql_graph`). Il gruppo di divisione è il FILE, con la stessa chiave
+e lo stesso `split_of` di `prepare_data` (`codeql:{percorso}`, R21): i file che `prepare_data` tiene nel test finiscono in
+`data/eval/py_codeql.jsonl` e mai in train/val. Scrive `py_codeql_train.jsonl`, `py_codeql_val.jsonl`, `py_codeql_report.json`
+in `--out-dir` e `py_codeql.jsonl` in `--eval-dir`.
+
 Uso (sotto un tetto di memoria, il motore è pesante):
   systemd-run --user --scope -q -p MemoryMax=10G -p MemorySwapMax=0 \\
     python3 build_graph_data.py juliet --raw-dir data/raw --out-dir data/graph --eval-dir data/eval --max-train 1300
+  systemd-run --user --scope -q -p MemoryMax=10G -p MemorySwapMax=0 \\
+    python3 build_graph_data.py codeql --raw-dir data/raw --out-dir data/graph --eval-dir data/eval
 
 Solo libreria standard.
 """
@@ -30,18 +38,22 @@ import copy
 import json
 import re
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import c_anonymize
+import codeql_graph
 import common
 import graph_examples
 import juliet_graph
 import leak_audit
+import prepare_data
 import slice_io
 
 SOURCE = "juliet-nist"
+PY_SOURCE = "codeql-python"
 DEPTH = 5
 # Le stesse percentuali che `prepare_data.split_of` usa per le altre fonti: default di `--val-pct` e `--holdout-pct`
 # in `prepare_data.py`.
@@ -544,6 +556,146 @@ def build_juliet(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42
     return report
 
 
+# --------------------------------------------------------------------------- traccia P1
+def _audit(train: list[dict], heldout: list[dict]) -> dict | None:
+    """Sacco di token, sola struttura e classificatori a un solo numero di `train` su `heldout` (None se manca uno dei due)."""
+    if not train or not heldout:
+        return None
+    return {"bow_accuracy": round(leak_audit.bow_accuracy(train, heldout), 4),
+            "structure_accuracy": round(leak_audit.structure_accuracy(train, heldout), 4),
+            "stump_accuracies": leak_audit.stump_accuracies(train, heldout)}
+
+
+def build_codeql(raw_dir: Path, out_dir: Path, eval_dir: Path, *, seed: int = 42, engine_bin: Path | None = None,
+                 val_pct: int = VAL_PCT, test_pct: int = TEST_PCT, p_callers: float = 0.7,
+                 codeql_root: Path | None = None) -> dict:
+    """Costruisce la traccia P1, scrive i file e restituisce il rapporto (lo stesso di `py_codeql_report.json`).
+
+    L'albero dei test (`raw_dir/codeql-tests`, o `codeql_root`) si copia ripulito in una cartella temporanea; il motore
+    gira una volta per directory di query che ha almeno un file con aspettative inline; ogni slice si etichetta
+    (`codeql_graph.label_slices`), si ripulisce (`anonymize_python`) e diventa un esempio completo. Un esempio che dopo la
+    ripulitura ha ancora una parola-spia (un nome d'API o di funzione non definita nella slice, una f-string…) si scarta
+    e si conta: il controllo finale `forbidden_hits(mode="parts")` sui file scritti è vuoto per costruzione. Gruppo di
+    divisione = file (`codeql:{percorso}`) con `prepare_data.split_of(gruppo, seed, val_pct, test_pct)`: i file del test
+    di `prepare_data` finiscono solo in `py_codeql.jsonl`. Poi doppioni, conflitti, `make_candidates` una volta su tutto e
+    `choose_views` (`p_callers` slice completa, il resto solo sink dove è decidibile) su train e val.
+    """
+    started = time.monotonic()
+    raw_dir, out_dir, eval_dir = Path(raw_dir), Path(out_dir), Path(eval_dir)
+    kb = common.load_kb()
+    codeql_root = Path(codeql_root) if codeql_root else raw_dir / "codeql-tests"
+    allow = codeql_graph.catalog_leaky_names(kb) | codeql_graph.API_LEAKY_NAMES
+
+    stats: Counter = Counter()
+    leaky_words: Counter = Counter()
+    survivors: list[tuple[str, dict]] = []
+    per_root: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="codeql-tree-") as tmp:
+        tree = Path(tmp)
+        notes = codeql_graph.prepare_tree(codeql_root, tree, kb)
+        stats["files"] = len(notes)
+        stats["files_not_annotated"] = sum(not n["annotated"] for n in notes.values())
+        files_of: dict[str, list[str]] = defaultdict(list)
+        for rel, note in notes.items():
+            files_of[note["root"]].append(rel)
+        for root_rel in sorted(files_of):
+            if not any(notes[rel]["annotated"] for rel in files_of[root_rel]):
+                stats["roots_skipped_not_annotated"] += 1
+                continue
+            t0 = time.monotonic()
+            records, _stderr = slice_io.run_slice(tree / root_rel, None, depth=DEPTH, binary=engine_bin)
+            stats["roots"] += 1
+            stats["records"] += len(records)
+            labelled = codeql_graph.label_slices(records, notes, prefix=root_rel, stats=stats)
+            built = 0
+            for rec, label in labelled:
+                if rec.get("truncated"):
+                    stats["truncated_dropped"] += 1
+                    continue
+                group = f"codeql:{root_rel}/{rec['sink']['file']}"
+                meta = {"source": PY_SOURCE, "synthetic": False, "track": graph_examples.PY_CODEQL_TRACK, "group": group}
+                try:
+                    anon = codeql_graph.anonymize_python(rec, f"{seed}:{group}")
+                    example = graph_examples.build_example(anon, kb, label=label, variant_kind="bad" if label else "good",
+                                                           origin=None, meta=meta)
+                except ValueError:
+                    stats["anonymize_errors"] += 1
+                    continue
+                hits = leak_audit.forbidden_hits([example], mode="parts", extra_parts=codeql_graph.PY_EXTRA_PARTS, allow=allow)
+                if hits:
+                    stats["leaky_dropped"] += 1
+                    leaky_words.update({h.rsplit(": ", 1)[1] for h in hits})
+                    continue
+                survivors.append((prepare_data.split_of(group, seed, val_pct, test_pct), example))
+                built += 1
+            seconds = round(time.monotonic() - t0, 1)
+            per_root.append({"root": Path(root_rel).name, "records": len(records), "labelled": len(labelled),
+                             "examples": built, "seconds": seconds})
+            print(f"{Path(root_rel).name}: {len(records)} slice, {len(labelled)} etichettate, {built} esempi, {seconds} s",
+                  file=sys.stderr)
+
+    split_of_example = {id(ex): split for split, ex in survivors}
+    fulls, duplicates = dedupe_examples([ex for _, ex in survivors])
+    kept, conflicts = graph_examples.drop_conflicts(fulls)
+    candidates = graph_examples.make_candidates(kept, kb)
+    by_split = {split: [c for c in candidates if split_of_example[id(c["full"])] == split] for split in ("train", "val", "test")}
+    written = {
+        "train": graph_examples.choose_views(by_split["train"], seed, p_callers),
+        "val": graph_examples.choose_views(by_split["val"], seed, p_callers),
+        "test": [c["full"] for c in by_split["test"]],
+    }
+    write_jsonl(out_dir / "py_codeql_train.jsonl", written["train"])
+    write_jsonl(out_dir / "py_codeql_val.jsonl", written["val"])
+    write_jsonl(eval_dir / "py_codeql.jsonl", written["test"])
+
+    everything = [ex for exs in written.values() for ex in exs]
+    report = {
+        "source": PY_SOURCE,
+        "track": graph_examples.PY_CODEQL_TRACK,
+        "seed": seed,
+        "depth": DEPTH,
+        "split_group": "codeql:{percorso del file} (R21)",
+        "val_pct": val_pct,
+        "test_pct": test_pct,
+        "p_callers": p_callers,
+        "files": stats["files"],
+        "files_not_annotated": stats["files_not_annotated"],
+        "roots": stats["roots"],
+        "roots_skipped_not_annotated": stats["roots_skipped_not_annotated"],
+        "per_root": per_root,
+        "records": stats["records"],
+        "skipped_unknown_file": stats["skipped_unknown_file"],
+        "skipped_not_annotated": stats["skipped_not_annotated"],
+        "skipped_other_cwe": stats["skipped_other_cwe"],
+        "skipped_ambiguous": stats["skipped_ambiguous"],
+        "truncated_dropped": stats["truncated_dropped"],
+        "anonymize_errors": stats["anonymize_errors"],
+        "leaky_dropped": stats["leaky_dropped"],
+        "leaky_words": dict(leaky_words.most_common(40)),
+        "duplicates_dropped": duplicates,
+        "conflicts_dropped": conflicts,
+        "examples_before_conflicts": len(fulls),
+        "examples_after_conflicts": len(kept),
+        "written": {split: len(exs) for split, exs in written.items()},
+        "labels": {str(label): sum(ex["meta"]["label"] == label for ex in everything) for label in (1, 0)},
+        "labels_by_split": {split: {str(label): sum(ex["meta"]["label"] == label for ex in exs) for label in (1, 0)}
+                            for split, exs in written.items()},
+        "per_cwe": {cwe: {split: sum(ex["meta"]["cwe"] == cwe for ex in exs) for split, exs in written.items()}
+                    for cwe in sorted({ex["meta"]["cwe"] for ex in everything})},
+        "groups": {split: len({ex["meta"]["group"] for ex in exs}) for split, exs in written.items()},
+        "multi_block_share": round(sum(n_blocks(ex) >= 2 for ex in written["train"]) / len(written["train"]), 4)
+        if written["train"] else 0.0,
+        "sink_only_share": sink_only_share(written["train"]),
+        "forbidden_hits": len(leak_audit.forbidden_hits(everything, mode="parts", extra_parts=codeql_graph.PY_EXTRA_PARTS,
+                                                         allow=allow)),
+        "audit_vs_test": _audit(written["train"], written["test"]),
+        "seconds": round(time.monotonic() - started, 1),
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "py_codeql_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
 # --------------------------------------------------------------------------- CLI
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -563,7 +715,24 @@ def main(argv: list[str] | None = None) -> int:
                    help="percentuale di varianti di flusso tenute fuori, in ciascuno strato")
     j.add_argument("--multi-share", type=float, default=MULTI_SHARE,
                    help="quota del train con chiamanti, a gruppi interi (0 = tetto uniforme di prima)")
+    c = sub.add_parser("codeql", help="traccia P1: test CodeQL Python con le slice del motore")
+    c.add_argument("--raw-dir", type=Path, default=Path("data/raw"), help="contiene codeql-tests/")
+    c.add_argument("--out-dir", type=Path, default=Path("data/graph"))
+    c.add_argument("--eval-dir", type=Path, default=Path("data/eval"))
+    c.add_argument("--seed", type=int, default=42, help="lo stesso di prepare_data.py: decide quali file sono del test")
+    c.add_argument("--engine-bin", type=Path, default=None, help="binario di sast-engine (default: slice_io.engine_bin())")
+    c.add_argument("--val-pct", type=int, default=VAL_PCT, help="come --val-pct di prepare_data.py")
+    c.add_argument("--test-pct", type=int, default=TEST_PCT, help="come --holdout-pct di prepare_data.py")
+    c.add_argument("--p-callers", type=float, default=0.7, help="quota di slice complete (il resto solo sink dove è decidibile)")
     args = ap.parse_args(argv)
+
+    if args.track == "codeql":
+        report = build_codeql(args.raw_dir, args.out_dir, args.eval_dir, seed=args.seed, engine_bin=args.engine_bin,
+                              val_pct=args.val_pct, test_pct=args.test_pct, p_callers=args.p_callers)
+        keys = ("files", "files_not_annotated", "roots", "records", "leaky_dropped", "truncated_dropped", "conflicts_dropped",
+                "written", "labels", "groups", "multi_block_share", "forbidden_hits")
+        print(json.dumps({k: report[k] for k in keys}, ensure_ascii=False, indent=2))
+        return 0
 
     report = build_juliet(args.raw_dir, args.out_dir, args.eval_dir, seed=args.seed, max_train=args.max_train,
                           max_eval=args.max_eval, zip_path=args.zip, engine_bin=args.engine_bin,

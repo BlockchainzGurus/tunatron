@@ -276,6 +276,28 @@ class BuildExampleTests(unittest.TestCase):
         self.assertNotIn("CVE-", reasoning)
         self.assertEqual(len(HEADER_RE.findall(user(ex))), 5)
 
+    def test_python_tracks_describe_the_call_chain_without_claiming_where_the_data_comes_from(self):
+        """R24: un sink costante con dei chiamanti non riceve «dati che vengono da» la radice: si dice solo come ci si arriva."""
+        self.assertEqual(graph_examples.PY_CODEQL_TRACK, "py_codeql")
+        self.assertIn(graph_examples.PY_CODEQL_TRACK, graph_examples.PY_TRACKS)
+        for label, kind in ((1, "bad"), (0, "good")):
+            ex = example(chain(3, callee="os.system", lang="python"), label, kind, origin=None,
+                         meta={**META, "track": graph_examples.PY_CODEQL_TRACK})
+            reasoning = finding(ex)["reasoning"]
+            self.assertIn("`os.system` in `fn_a0a0a0` is reached through the call chain from `fn_a2a2a2` (depth 2)", reasoning)
+            self.assertIn(GENERIC[label], reasoning)
+            self.assertNotIn("comes from", reasoning)
+            self.assertEqual(common.validate_finding(finding(ex)), [])
+        self.assertIn("comes from", finding(example(chain(3), 1))["reasoning"], "Juliet tiene la sua frase")
+
+    def test_python_tracks_keep_the_single_block_and_sink_only_forms(self):
+        meta = {**META, "track": graph_examples.PY_CODEQL_TRACK}
+        single = finding(example(chain(1, callee="os.system", lang="python"), 0, "good", origin=None, meta=meta))["reasoning"]
+        self.assertIn("(depth 0, no callers in the slice)", single)
+        only = finding(example(chain(3, callee="os.system", lang="python"), 0, "good", origin=None, meta=meta,
+                               view="sink_only"))["reasoning"]
+        self.assertIn("(depth 0, only block shown)", only)
+
     def test_vulnerable_fix_is_catalog_hint_and_safe_fix_is_none_needed(self):
         bad = finding(example(record(), 1))
         self.assertEqual(bad["suggested_fix"], ENTRY["CWE-78"]["fix_hint"])
