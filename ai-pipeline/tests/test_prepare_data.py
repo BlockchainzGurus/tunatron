@@ -502,6 +502,18 @@ class FunctionShareTests(unittest.TestCase):
         self.assertEqual((len(kept) - len(fn), len(fn), dropped), (10, 10, 90))
         self.assertEqual(sorted(collections.Counter(e["meta"]["label"] for e in fn).values()), [5, 5])
 
+    def test_extra_call_level_examples_widen_the_allowance_without_being_returned(self):
+        """R20: gli esempi con slice (call-level) si uniscono dopo il taglio ma contano per la quota dei function-level."""
+        data = self.make(10, 100)
+        kept, dropped = pd.limit_function_level(data, 0.5, seed=1, extra_calls=30)
+        fn = [e for e in kept if e["meta"]["sink_kind"] == "function"]
+        self.assertEqual((len(kept) - len(fn), len(fn), dropped), (10, 40, 60), "10 locali + 30 in arrivo → 40 function-level")
+        self.assertEqual(sorted(collections.Counter(e["meta"]["label"] for e in fn).values()), [20, 20])
+
+    def test_extra_calls_apply_the_cap_even_without_local_call_sinks(self):
+        kept, dropped = pd.limit_function_level(self.make(0, 100), 0.5, seed=1, extra_calls=10)
+        self.assertEqual((len(kept), dropped), (10, 90))
+
     def test_share_one_keeps_everything_and_zero_keeps_only_call_sinks(self):
         data = self.make(10, 100)
         self.assertEqual(pd.limit_function_level(data, 1.0, seed=1), (data, 0))
@@ -712,6 +724,25 @@ class MultiSourceEndToEndTests(unittest.TestCase):
             self.assertEqual(stats["val"]["graph_added"], 3)
             self.assertEqual(stats["test"]["graph_added"], 0)
             self.assertEqual(stats["train"]["by_source"]["juliet-nist"]["kept"], {"vulnerable": 3, "patched": 3})
+
+    def test_graph_examples_count_toward_the_function_level_allowance(self):
+        """R20: con --graph-dir la parte function-level delle fonti reali (PrimeVul…) non si riduce per colpa di chi ha tolto i call-level."""
+        path = self.raw / "train.jsonl"
+        extra = [record(idx=f"fx{i}", commit_id=f"fxc{i}", func=f"void fx_fn{i}(struct a *p)\n{{\n  p->x = {i};\n}}", cwe=["CWE-476"]) for i in range(400)]
+        path.write_text(path.read_text(encoding="utf-8") + "\n".join(json.dumps(r) for r in extra) + "\n", encoding="utf-8")
+        graph = self.write_graph_dir()
+
+        def function_level(out: Path) -> int:
+            return sum(1 for e in self.read_lines(out, "train") if e["meta"]["sink_kind"] == "function")
+
+        self.run_main(self.raw, self.out, "--label-ratio", "0")
+        with tempfile.TemporaryDirectory() as other:
+            self.run_main(self.raw, Path(other), "--label-ratio", "0", "--graph-dir", str(graph))
+            without, with_graph = function_level(self.out), function_level(Path(other))
+            self.assertGreater(without, 0)
+            self.assertGreater(with_graph, without, "i call-level con slice alzano la quota consentita")
+            stats = lambda out: json.loads((out / "stats.json").read_text(encoding="utf-8"))["train"]  # noqa: E731
+            self.assertLess(stats(Path(other))["function_level_dropped"], stats(self.out)["function_level_dropped"])
 
     def test_output_is_deterministic_with_a_graph_dir(self):
         graph = self.write_graph_dir()

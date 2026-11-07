@@ -295,12 +295,17 @@ def dedupe(examples: list[dict], forbidden: set[str]) -> tuple[list[dict], dict]
     return kept, dict(removed)
 
 
-def limit_function_level(examples: list[dict], share: float, seed: int) -> tuple[list[dict], int]:
-    """Limita gli esempi "function-level" a `share` del totale (tutti i sink-chiamata restano), mantenendo il bilanciamento delle etichette."""
+def limit_function_level(examples: list[dict], share: float, seed: int, extra_calls: int = 0) -> tuple[list[dict], int]:
+    """Limita gli esempi "function-level" a `share` del totale (tutti i sink-chiamata restano), mantenendo il bilanciamento delle etichette.
+
+    `extra_calls` sono esempi call-level che si uniranno dopo il taglio (quelli con slice, `--graph-dir`) e non sono in `examples`:
+    contano per la quota, così la parte function-level delle fonti reali non si riduce quando i call-level vecchi calano (R20).
+    """
     calls = [e for e in examples if e["meta"]["sink_kind"] == "call"]
-    if share >= 1 or not calls:
+    total_calls = len(calls) + extra_calls
+    if share >= 1 or not total_calls:
         return examples, 0
-    allowed = int(share / (1 - share) * len(calls)) if share > 0 else 0
+    allowed = int(share / (1 - share) * total_calls) if share > 0 else 0
     rng = random.Random(seed)
     keep: set[int] = set()
     for label in (0, 1):
@@ -729,26 +734,28 @@ def main(argv: list[str] | None = None) -> int:
     removed = {"test": removed_test}
     function_dropped = {"train": 0, "val": 0, "test": 0}
     skew_dropped = {"train": 0, "val": 0, "test": 0}
-    for split in ("train", "val"):
-        collected[split], removed[split] = dedupe(collected[split], forbidden)
-        collected[split], skew_dropped[split] = limit_label_skew(collected[split], args.label_ratio, args.seed)
-        collected[split], function_dropped[split] = limit_function_level(collected[split], args.function_share, args.seed)
-        collected[split], more = limit_label_skew(collected[split], args.label_ratio, args.seed)  # il taglio dei function-level può averla spostata
-        skew_dropped[split] += more
-
-    # Esempi con slice: dopo i limiti delle fonti vecchie (che non li toccano), con le stesse garanzie (nessun duplicato esatto,
-    # nulla che compaia nel test) e mai nel test
+    # Esempi con slice: stesse garanzie delle altre fonti (nessun duplicato esatto, nulla che compaia nel test), mai nel test. Non
+    # passano dai limiti delle fonti vecchie (il loro bilanciamento lo decide chi li ha scritti) e si accodano dopo, ma sono call-level:
+    # contano per la quota dei function-level (R20), altrimenti questa si ridurrebbe quando i call-level vecchi lasciano il posto a loro.
     graph_added = {"train": 0, "val": 0, "test": 0}
     graph_removed: dict[str, dict] = {"train": {}, "val": {}, "test": {}}
+    graph = {"train": [], "val": []}
     if with_graph:
         graph = load_graph_examples(args.graph_dir)
         if not any(graph.values()):
             print(f"ATTENZIONE: {args.graph_dir} non contiene esempi in *_train.jsonl / *_val.jsonl", file=sys.stderr)
-        test_prompts = {prompt_hash(e) for e in collected["test"]}
-        for split in ("train", "val"):
-            before = len(collected[split])
-            collected[split], graph_removed[split] = merge_graph_examples(collected[split], graph[split], test_prompts, forbidden)
-            graph_added[split] = len(collected[split]) - before
+    test_prompts = {prompt_hash(e) for e in collected["test"]}
+    for split in ("train", "val"):
+        collected[split], removed[split] = dedupe(collected[split], forbidden)
+        collected[split], skew_dropped[split] = limit_label_skew(collected[split], args.label_ratio, args.seed)
+        merged, graph_removed[split] = merge_graph_examples(collected[split], graph[split], test_prompts, forbidden)
+        incoming = merged[len(collected[split]):]
+        graph_added[split] = len(incoming)
+        collected[split], function_dropped[split] = limit_function_level(collected[split], args.function_share, args.seed, extra_calls=len(incoming))
+        collected[split], more = limit_label_skew(collected[split], args.label_ratio, args.seed)  # il taglio dei function-level può averla spostata
+        skew_dropped[split] += more
+        collected[split] = collected[split] + incoming
+        if with_graph:
             print(f"graph/{split}: {len(graph[split])} esempi letti, {graph_added[split]} aggiunti (scartati: {graph_removed[split]})", file=sys.stderr)
 
     # Un esempio oltre `--max-seq-length` verrebbe troncato dal training (via il JSON del verdetto, che sta in fondo): si scarta e si conta.
