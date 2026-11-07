@@ -104,7 +104,10 @@ class FetchTests(TempDirCase):
             path = fetch_juliet(dest)
         self.assertEqual(path, dest / ZIP_NAME)
         self.assertEqual(path.read_bytes(), data)
-        self.assertEqual(urlopen.call_args.args[0], JULIET_URL)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, JULIET_URL)
+        agent = request.get_header("User-agent", "")
+        self.assertTrue(agent and "urllib" not in agent.lower(), "NIST (Cloudflare) risponde 403 allo user-agent predefinito di urllib")
         self.assertEqual(tree(dest), {ZIP_NAME}, "il file temporaneo deve sparire dopo il rename")
 
     def test_fetch_juliet_discards_download_with_wrong_sha256(self):

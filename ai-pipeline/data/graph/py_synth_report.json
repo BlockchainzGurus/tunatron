@@ -1,0 +1,78 @@
+{
+  "source": "py-synth",
+  "track": "py_synth",
+  "seed": 42,
+  "n": 400,
+  "depth": 5,
+  "val_pct": 5,
+  "p_callers": 0.7,
+  "share": 0.15,
+  "real_python_examples": 152,
+  "cap": 26,
+  "packages": 400,
+  "records_missing": 0,
+  "truncated_dropped": 0,
+  "build_errors": 0,
+  "leaky_dropped": 0,
+  "duplicates_dropped": 0,
+  "conflicts_dropped": 0,
+  "examples_before_cap": 400,
+  "cap_dropped": 374,
+  "written": {
+    "train": 26,
+    "val": 0
+  },
+  "labels": {
+    "1": 13,
+    "0": 13
+  },
+  "per_cwe": {
+    "CWE-22": 4,
+    "CWE-601": 8,
+    "CWE-78": 4,
+    "CWE-89": 10
+  },
+  "by_chain_len": {
+    "0": 2,
+    "1": 2,
+    "2": 10,
+    "3": 12
+  },
+  "by_kind": {
+    "constant": 4,
+    "decoy_source": 2,
+    "long_constant": 3,
+    "tainted": 13,
+    "validated": 4
+  },
+  "multi_block_share": 0.9231,
+  "sink_only_share": {
+    "overall": 0.0,
+    "by_label": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "by_track": {
+      "py_synth": 0.0
+    }
+  },
+  "forbidden_hits": 0,
+  "shortcuts_before_cap": {
+    "bow_accuracy": 0.8295,
+    "structure_accuracy": 0.5,
+    "stump_accuracies": {
+      "prompt_chars": 0.5227,
+      "code_chars": 0.4886,
+      "code_lines": 0.4659,
+      "braces": 0.5568,
+      "numbers": 0.5341,
+      "n_blocks": 0.5,
+      "max_depth": 0.5,
+      "sink_block_lines": 0.4659,
+      "fn_tokens": 0.5,
+      "v_tokens": 0.5,
+      "text_placeholder": 0.5
+    }
+  },
+  "seconds": 0.6
+}

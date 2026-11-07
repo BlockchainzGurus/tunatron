@@ -85,6 +85,13 @@ cd ai-pipeline
 # Download e formattazione dataset da fonti pubbliche
 python3 prepare_data.py --download --test-benign-ratio 3
 
+# Esempi con slice reali del grafo (Juliet C, test CodeQL Python, pilota CVEfixes/PyVul, sintetici Python):
+# vedi "Dati con slice reali" sotto. Il motore va compilato (cargo build --release) e i comandi girano sotto un tetto di memoria.
+# python3 build_graph_data.py juliet --max-train 1080 && python3 build_graph_data.py codeql
+# python3 pyvul_pilot.py --parquet data/raw/cvefixes_pyvul.parquet --repos 20 --work-dir outputs/pyvul-pilot
+# python3 build_graph_data.py synth     # per ultimo: il tetto dipende dagli esempi Python veri già scritti
+# python3 prepare_data.py ... --graph-dir data/graph --out-dir data
+
 # Verifica preliminare di dati e iperparametri
 ../.venv/bin/python train.py --dry-run
 
@@ -133,6 +140,12 @@ cd ai-pipeline
 
 # Valutazione accuratezza (Semgrep vs LLM senza slice vs LLM con slice)
 python3 benchmark.py accuracy --systems semgrep llm-noslice llm-slice
+
+# I chiamanti servono? Lo stesso modello con la catena fino a --depth e con il solo blocco del sink, sulle coppie di Juliet
+python3 benchmark.py accuracy --test data/eval/juliet_pairs.jsonl --systems llm-graph llm-sink-only --depth 5
+
+# Falsi positivi su pygoat (lista congelata di 80 sink), risposte troncate e CVE inventate
+python3 benchmark.py frozen --repo outputs/repos/pygoat/repo --depth 5
 
 # Benchmark prestazionale hardware (confronto automatico BF16 / FP8 / NVFP4)
 python3 benchmark.py hardware --models bf16=model_bf16 fp8=model_fp8 nvfp4=model_nvfp4
@@ -236,8 +249,8 @@ Il modulo `prepare_data.py` genera esempi di addestramento strutturati nel forma
 | **PrimeVul** | MIT | CVE reali in C/C++, coppie vulnerabile/corretta. | Sink di chiamata o livello di funzione. |
 | **SecVulEval** | MIT | C/C++, ~10k coppie con commit di fix. | Localizzazione tramite diff del commit. |
 | **CVEfixes + PyVul** | CVEfixes: dati CC-BY-4.0, codice MIT. **PyVul: nessuna licenza dichiarata** (nel repo non c'è un file LICENSE; la CC BY-NC-ND vista su arXiv è del paper, non dei dati) | Repository Python storici con `code_before` e `code_after`. | Derivato dalle modifiche apportate dalla fix. |
-| **Juliet C/C++ 1.3** | Non coperto da copyright negli USA; CC0 1.0 dove NIST ha diritti all'estero | Casi sintetici mirati (SARD), impiegati esclusivamente in train/validation con etichetta esplicita `/* FLAW */`. | Annotazione esplicita nel sorgente. |
-| **CodeQL Security Suite**| MIT | Test suite manuali in Python e C/C++ con tag `# $ Alert`. | Annotazione di riga. |
+| **Juliet C/C++ 1.3** | Non coperto da copyright negli USA; CC0 1.0 dove NIST ha diritti all'estero | Casi sintetici mirati (SARD) per le CWE 120, 78, 190, 416, usati con le slice reali del grafo (vedi sotto); il commento `FLAW` non si usa e il codice è anonimizzato. | Chiamate del catalogo; etichetta dal nome originale della funzione (`bad` / `good*`). |
+| **CodeQL Security Suite**| MIT | Test suite manuali in Python e C/C++ con tag `# $ Alert`. I Python hanno anche la versione con slice (traccia P1). | Annotazione di riga. |
 
 Licenze verificate alla fonte il 2026-11-06 (le dichiarano i metadati o i repository dei dataset); sono riprese, con i riferimenti da citare, nella sezione *License and attributions* della model card (`DATA_LICENSES` in `ai-pipeline/model_card.py`). Il codice dei dataset viene da progetti open source e ogni frammento resta sotto la licenza del progetto d'origine.
 
@@ -245,8 +258,58 @@ Licenze verificate alla fonte il 2026-11-06 (le dichiarano i metadati o i reposi
 
 1. **Prevenzione del Data Leakage:** Qualsiasi funzione presente nel test set (o la sua controparte corretta/vulnerabile) viene rimossa da training e validation set tramite hash crittografico del corpo della funzione.
 2. **Deduplicazione e Ratio delle Classi:** Eliminazione dei duplicati esatti e bilanciamento del rapporto vulnerabile/benigno (`--label-ratio 1.25`), con priorità agli esempi estratti da repository reali rispetto a quelli sintetici.
-3. **Controllo dei Function-Level Sink:** La quota di esempi senza sink esplicito è limitata al 50% (`--function-share 0.5`).
-4. **Esclusione di Dataset Non Certificati:** Il dataset `CyberNative/Code_Vulnerability_Security_DPO` è stato escluso a causa dell'assenza di mappature CWE native e per problemi di validità delle annotazioni riscontrati negli audit ufficiali del dataset.
+3. **Controllo dei Function-Level Sink:** La quota di esempi senza sink esplicito è limitata al 50% (`--function-share 0.5`); gli esempi con slice sono tutti a sink-chiamata e contano per questa quota, ma non vengono mai tagliati né ribilanciati da `prepare_data.py`.
+4. **Target senza CVE:** il `reasoning` e il `suggested_fix` non citano id CVE, descrizioni CVE né messaggi di commit (nelle prime versioni il modello imparava a inventare CVE); la correzione suggerita per i vulnerabili è il `fix_hint` del catalogo.
+5. **Esclusione di Dataset Non Certificati:** Il dataset `CyberNative/Code_Vulnerability_Security_DPO` è stato escluso a causa dell'assenza di mappature CWE native e per problemi di validità delle annotazioni riscontrati negli audit ufficiali del dataset.
+
+### Dati con slice reali (chiamanti)
+
+Gli esempi con slice usano le backward slice vere del motore (`sast-engine slice`, lo stesso `build_graph` / `CodeGraph::slice` del server): il prompt mostra la catena dei chiamanti dal più esterno al sink, fino a profondità 5, e il verdetto dipende da ciò che i chiamanti passano. Le tracce:
+
+| Traccia (`meta.track`) | Origine | Cosa insegna |
+|---|---|---|
+| `juliet` | Juliet 1.3, CWE 120/78/190/416, codice anonimizzato (nomi, righe, file, commenti, stringhe) | Il verdetto sta nei chiamanti: gemelli `bad` / `good*` con lo stesso corpo del sink. |
+| `py_codeql` | Test CodeQL Python (CWE a flusso di dati), etichetta dai `$ Alert` | Funzioni singole, senza chiamanti: ragionare dentro la funzione. |
+| `py_pyvul` | Pilota CVEfixes/PyVul su 20 repo, checkout dei commit | Genitore della fix = vulnerabile, commit di fix = corretto, chiamanti veri. |
+| `py_synth` | Pacchetti Python sintetici a coppie di gemelli (catena di 0-3 funzioni) | Il chiamante in cima cambia, il sink no; negativi costanti, controllati, con sorgente non usata. Al più il 15% degli esempi Python con slice, mai nella valutazione. |
+
+Conteggi dei dati generati (`ai-pipeline/data/`, seme 42):
+
+| Insieme | Esempi | Per fonte (`meta.source`) |
+|---|---|---|
+| `train.jsonl` | 5.261 | primevul 1.190, secvuleval 2.021, cvefixes-python 373, pyvul 149, codeql-tests 274, **juliet-nist 1.080** (20,5%), **codeql-python 94**, **pyvul-graph 54**, **py-synth 26** |
+| `val.jsonl` | 369 | primevul 134, secvuleval 120, cvefixes-python 13, pyvul 11, codeql-tests 23, juliet-nist 64, codeql-python 2, pyvul-graph 2 |
+| `test.jsonl` | 3.266 | invariato nella composizione: secvuleval 1.622, primevul 1.464, cvefixes-python 116, pyvul 50, codeql-tests 14 |
+
+Ogni esempio con slice ha in `meta.trace` la traccia completa: `{"cwe_id", "sink": {"function", "file", "line", "cwe_id"}, "blocks": [{"file", "name", "start_line", "end_line", "depth", "lang", "code"}, ...]}` (blocchi dal chiamante più esterno al sink). `meta.view` è `callers` (tutti i blocchi) o `sink_only` (il solo blocco a profondità 0, ammesso solo se quel prompt non compare con l'etichetta opposta), `meta.pair_id` lega i gemelli che hanno lo stesso prompt solo-sink con etichette opposte. `benchmark.py` rifà il prompt da `meta.trace` a qualsiasi profondità.
+
+File di valutazione in `ai-pipeline/data/eval/`:
+
+| File | Contenuto |
+|---|---|
+| `juliet_test.jsonl` (600) | Test case di Juliet mai visti (divisione per test case). |
+| `juliet_unseen_variants.jsonl` (600) | Varianti di flusso intere tenute fuori (12, 14, 15, 52): forme di catena mai viste. |
+| `juliet_pairs.jsonl` (600 = 300 coppie) | Gemelli con lo stesso prompt solo-sink e verdetti opposti: misurano se i chiamanti contano (S1). |
+| `py_codeql.jsonl` (17) | File CodeQL Python che `prepare_data.py` tiene nel test; sottile per costruzione (2 file, CWE 78/94). |
+| `py_cvefixes.jsonl` (16) | Coppie dei commit che stanno nel test di `prepare_data.py` (divisione per commit). |
+| `pygoat_frozen.json` (80 sink) | Lista letta a mano su pygoat `2aa4cc1`: 69 sicuri certi (62 `redirect` con destinazione costante, query e `subprocess` costanti, URL da impostazioni) e 11 vulnerabili verificati; serve per i falsi positivi (S3) e per le risposte troncate o con CVE inventate (S4). |
+
+Rigenerazione completa (dalla cartella `ai-pipeline`, motore compilato, tutto sotto `systemd-run --user --scope -p MemoryMax=10G -p MemorySwapMax=0`):
+
+```bash
+python3 build_graph_data.py juliet --raw-dir data/raw --out-dir data/graph --eval-dir data/eval --max-train 1080
+python3 build_graph_data.py codeql --raw-dir data/raw --out-dir data/graph --eval-dir data/eval
+uv run --no-project --with pyarrow python pyvul_pilot.py --parquet data/raw/cvefixes_pyvul.parquet --repos 20 \
+    --work-dir outputs/pyvul-pilot --out-dir data/graph --eval-dir data/eval
+python3 build_graph_data.py synth --out-dir data/graph --n 400
+uv run --no-project --with pyarrow python prepare_data.py --train data/raw/primevul_train.jsonl \
+    --valid data/raw/primevul_valid.jsonl --test data/raw/primevul_test.jsonl --secvuleval data/raw/secvuleval.parquet \
+    --python-pairs data/raw/cvefixes_pyvul.parquet --codeql data/raw/codeql-tests --test-benign-ratio 3 \
+    --graph-dir data/graph --out-dir data
+python3 leak_audit.py --train data/graph/juliet_train.jsonl --heldout data/eval/juliet_test.jsonl   # esce con 1 se ci sono perdite
+```
+
+I prompt, le schede delle CWE e i suggerimenti di correzione sono in inglese (`shared/prompt_template.json` versione 2): un modello addestrato sui dati precedenti ha visto solo prompt italiani, quindi va riaddestrato dal modello base.
 
 ---
 
@@ -293,6 +356,7 @@ cd ..
 
 - **Risoluzione Call Graph:** L'analisi del grafo delle chiamate si basa su euristiche di corrispondenza per nome (senza analisi approfondita dei tipi o dei puntatori per C/C++); chiamate a livello di modulo globale non vengono attualmente tracciate come sink.
 - **Linguaggi Supportati:** C, C++ e Python.
+- **Dati con slice, limiti misurati:** (a) la quota di esempi «solo sink» è lo 0,7% del train con slice (Juliet 0,2%, pilota PyVul 13%) contro il 30% voluto: quasi tutti i prompt solo-sink sono gemelli di uno con l'etichetta opposta e quindi non decidibili; (b) in Juliet il vulnerabile è quasi sempre il più lungo (un classificatore sulla sola lunghezza arriva a ~0,68): `benchmark.py` riporta S1 anche a lunghezza controllata e la base «il più lungo è il vulnerabile», e senza quelle due righe S1 non prova il ragionamento sul flusso; (c) le slice delle funzioni Flask/Django non hanno chiamanti (il chiamante è il framework): `py_codeql` ha 0% di slice con chiamanti; (d) il pilota CVEfixes/PyVul ha reso 38 coppie da 167 righe (22,75%) su 20 repo, ed è fermo lì in attesa di una decisione; (e) la valutazione `py_codeql` ha solo 17 esempi in 2 file.
 - **Generazione SBOM:** La generazione SBOM da manifest analizza file standard di dipendenze (`requirements.txt`, `Cargo.lock`, ecc.); per scansioni binarie o alberi complessi di dipendenze è raccomandato configurare `syft` tramite `SYFT_BIN`.
 - **Requisiti Notarizzazione:** La funzione di notarizzazione richiede un nodo IPFS locale o remoto raggiungibile e un RPC EVM con account sbloccato per la firma delle transazioni.
 

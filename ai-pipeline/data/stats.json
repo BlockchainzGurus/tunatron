@@ -47,17 +47,6 @@
           "too_long": 4
         }
       },
-      "juliet": {
-        "available": {
-          "benign": 0,
-          "patched": 0,
-          "vulnerable": 0
-        },
-        "kept": {},
-        "kept_localized": {},
-        "kept_sink_kind": {},
-        "skipped": {}
-      },
       "primevul": {
         "available": {
           "benign": 2139,
@@ -80,6 +69,19 @@
           "cwe_not_in_kb": 5071,
           "no_sink": 4100,
           "too_long": 279
+        }
+      },
+      "pyvul": {
+        "kept": {
+          "patched": 25,
+          "vulnerable": 25
+        },
+        "kept_localized": {
+          "diff": 50
+        },
+        "kept_sink_kind": {
+          "call": 28,
+          "function": 22
         }
       },
       "secvuleval": {
@@ -111,7 +113,10 @@
     "duplicates_removed": {
       "duplicate": 34
     },
+    "file_bytes": 16012699,
     "function_level_dropped": 0,
+    "graph_added": 0,
+    "graph_removed": {},
     "kept": {
       "benign": 10,
       "patched": 2110,
@@ -127,34 +132,56 @@
       "function": 3053
     },
     "label_skew_dropped": 0,
+    "over_size_limit": false,
     "skipped": {
       "cwe_not_in_kb": 5714,
       "no_sink": 4166,
       "too_long": 365
-    }
+    },
+    "source_counts": {
+      "codeql-tests": 14,
+      "cvefixes-python": 116,
+      "primevul": 1464,
+      "pyvul": 50,
+      "secvuleval": 1622
+    },
+    "too_long_dropped": {},
+    "trace_shares": {}
   },
   "train": {
     "available": {
       "benign": 4449,
-      "patched": 117630,
-      "vulnerable": 12986
+      "patched": 117305,
+      "vulnerable": 11036
     },
     "by_source": {
+      "codeql-python": {
+        "kept": {
+          "patched": 39,
+          "vulnerable": 55
+        },
+        "kept_localized": {
+          "None": 94
+        },
+        "kept_sink_kind": {
+          "call": 94
+        }
+      },
       "codeql-tests": {
         "available": {
           "benign": 0,
-          "patched": 243,
-          "vulnerable": 475
+          "patched": 201,
+          "vulnerable": 295
         },
         "kept": {
-          "patched": 124,
-          "vulnerable": 119
+          "patched": 102,
+          "vulnerable": 172
         },
         "kept_localized": {
-          "comment": 243
+          "comment": 274
         },
         "kept_sink_kind": {
-          "call": 243
+          "call": 274
         },
         "skipped": {}
       },
@@ -165,40 +192,32 @@
           "vulnerable": 856
         },
         "kept": {
-          "patched": 167,
-          "vulnerable": 252
+          "patched": 148,
+          "vulnerable": 225
         },
         "kept_localized": {
-          "None": 16,
-          "diff": 403
+          "None": 13,
+          "diff": 360
         },
         "kept_sink_kind": {
           "call": 179,
-          "function": 240
+          "function": 194
         },
         "skipped": {
           "cwe_not_in_kb": 1319,
           "too_long": 37
         }
       },
-      "juliet": {
-        "available": {
-          "benign": 0,
-          "patched": 283,
-          "vulnerable": 1770
-        },
+      "juliet-nist": {
         "kept": {
-          "patched": 276,
-          "vulnerable": 849
+          "patched": 540,
+          "vulnerable": 540
         },
         "kept_localized": {
-          "comment": 1125
+          "None": 1080
         },
         "kept_sink_kind": {
-          "call": 1125
-        },
-        "skipped": {
-          "cwe_not_in_kb": 2270
+          "call": 1080
         }
       },
       "primevul": {
@@ -208,21 +227,58 @@
           "vulnerable": 3356
         },
         "kept": {
-          "patched": 680,
-          "vulnerable": 812
+          "patched": 540,
+          "vulnerable": 650
         },
         "kept_localized": {
-          "None": 844,
-          "diff": 648
+          "None": 683,
+          "diff": 507
         },
         "kept_sink_kind": {
           "call": 359,
-          "function": 1133
+          "function": 831
         },
         "skipped": {
           "cwe_not_in_kb": 35867,
           "no_sink": 22321,
           "too_long": 2047
+        }
+      },
+      "py-synth": {
+        "kept": {
+          "patched": 13,
+          "vulnerable": 13
+        },
+        "kept_localized": {
+          "None": 26
+        },
+        "kept_sink_kind": {
+          "call": 26
+        }
+      },
+      "pyvul": {
+        "kept": {
+          "patched": 53,
+          "vulnerable": 96
+        },
+        "kept_localized": {
+          "diff": 149
+        },
+        "kept_sink_kind": {
+          "call": 144,
+          "function": 5
+        }
+      },
+      "pyvul-graph": {
+        "kept": {
+          "patched": 27,
+          "vulnerable": 27
+        },
+        "kept_localized": {
+          "None": 54
+        },
+        "kept_sink_kind": {
+          "call": 54
         }
       },
       "secvuleval": {
@@ -232,16 +288,16 @@
           "vulnerable": 6529
         },
         "kept": {
-          "patched": 1356,
-          "vulnerable": 1197
+          "patched": 1077,
+          "vulnerable": 944
         },
         "kept_localized": {
-          "None": 549,
-          "diff": 2004
+          "None": 461,
+          "diff": 1560
         },
         "kept_sink_kind": {
           "call": 421,
-          "function": 2132
+          "function": 1600
         },
         "skipped": {
           "cwe_not_in_kb": 5183,
@@ -251,52 +307,109 @@
       }
     },
     "duplicates_removed": {
-      "duplicate": 1492,
-      "in_test": 413
+      "duplicate": 1357,
+      "in_test": 410
     },
-    "function_level_dropped": 15320,
+    "file_bytes": 25864701,
+    "function_level_dropped": 16204,
+    "graph_added": 1254,
+    "graph_removed": {},
     "kept": {
-      "patched": 2660,
-      "vulnerable": 3325
+      "patched": 2539,
+      "vulnerable": 2722
     },
     "kept_localized": {
-      "None": 1409,
-      "comment": 1368,
-      "diff": 3208
+      "None": 2411,
+      "comment": 274,
+      "diff": 2576
     },
     "kept_sink_kind": {
-      "call": 2471,
-      "function": 3514
+      "call": 2631,
+      "function": 2630
     },
-    "label_skew_dropped": 1043,
+    "label_skew_dropped": 0,
+    "over_size_limit": false,
     "skipped": {
-      "cwe_not_in_kb": 44639,
+      "cwe_not_in_kb": 42369,
       "no_sink": 23009,
       "too_long": 3095
+    },
+    "source_counts": {
+      "codeql-python": 94,
+      "codeql-tests": 274,
+      "cvefixes-python": 373,
+      "juliet-nist": 1080,
+      "primevul": 1190,
+      "py-synth": 26,
+      "pyvul": 149,
+      "pyvul-graph": 54,
+      "secvuleval": 2021
+    },
+    "too_long_dropped": {},
+    "trace_shares": {
+      "juliet": {
+        "examples": 1080,
+        "multi_block": 540,
+        "multi_block_share": 0.5,
+        "sink_only": 2,
+        "sink_only_share": 0.0019
+      },
+      "py_codeql": {
+        "examples": 94,
+        "multi_block": 0,
+        "multi_block_share": 0.0,
+        "sink_only": 0,
+        "sink_only_share": 0.0
+      },
+      "py_pyvul": {
+        "examples": 54,
+        "multi_block": 26,
+        "multi_block_share": 0.4815,
+        "sink_only": 7,
+        "sink_only_share": 0.1296
+      },
+      "py_synth": {
+        "examples": 26,
+        "multi_block": 24,
+        "multi_block_share": 0.9231,
+        "sink_only": 0,
+        "sink_only_share": 0.0
+      }
     }
   },
   "val": {
     "available": {
       "benign": 638,
-      "patched": 15221,
-      "vulnerable": 975
+      "patched": 15201,
+      "vulnerable": 878
     },
     "by_source": {
+      "codeql-python": {
+        "kept": {
+          "vulnerable": 2
+        },
+        "kept_localized": {
+          "None": 2
+        },
+        "kept_sink_kind": {
+          "call": 2
+        }
+      },
       "codeql-tests": {
         "available": {
           "benign": 0,
           "patched": 3,
-          "vulnerable": 27
+          "vulnerable": 24
         },
         "kept": {
           "patched": 2,
-          "vulnerable": 9
+          "vulnerable": 21
         },
         "kept_localized": {
-          "comment": 11
+          "comment": 23
         },
         "kept_sink_kind": {
-          "call": 11
+          "call": 23
         },
         "skipped": {}
       },
@@ -307,39 +420,32 @@
           "vulnerable": 43
         },
         "kept": {
-          "patched": 11,
-          "vulnerable": 10
+          "patched": 9,
+          "vulnerable": 4
         },
         "kept_localized": {
-          "diff": 21
+          "None": 1,
+          "diff": 12
         },
         "kept_sink_kind": {
           "call": 4,
-          "function": 17
+          "function": 9
         },
         "skipped": {
           "cwe_not_in_kb": 40,
           "too_long": 2
         }
       },
-      "juliet": {
-        "available": {
-          "benign": 0,
-          "patched": 20,
-          "vulnerable": 94
-        },
+      "juliet-nist": {
         "kept": {
-          "patched": 20,
-          "vulnerable": 43
+          "patched": 32,
+          "vulnerable": 32
         },
         "kept_localized": {
-          "comment": 63
+          "None": 64
         },
         "kept_sink_kind": {
-          "call": 63
-        },
-        "skipped": {
-          "cwe_not_in_kb": 134
+          "call": 64
         }
       },
       "primevul": {
@@ -349,21 +455,45 @@
           "vulnerable": 422
         },
         "kept": {
-          "patched": 77,
-          "vulnerable": 82
+          "patched": 63,
+          "vulnerable": 71
         },
         "kept_localized": {
-          "None": 96,
-          "diff": 63
+          "None": 79,
+          "diff": 55
         },
         "kept_sink_kind": {
           "call": 42,
-          "function": 117
+          "function": 92
         },
         "skipped": {
           "cwe_not_in_kb": 4524,
           "no_sink": 3469,
           "too_long": 232
+        }
+      },
+      "pyvul": {
+        "kept": {
+          "patched": 5,
+          "vulnerable": 6
+        },
+        "kept_localized": {
+          "diff": 11
+        },
+        "kept_sink_kind": {
+          "call": 11
+        }
+      },
+      "pyvul-graph": {
+        "kept": {
+          "patched": 1,
+          "vulnerable": 1
+        },
+        "kept_localized": {
+          "None": 2
+        },
+        "kept_sink_kind": {
+          "call": 2
         }
       },
       "secvuleval": {
@@ -373,16 +503,16 @@
           "vulnerable": 389
         },
         "kept": {
-          "patched": 64,
-          "vulnerable": 73
+          "patched": 55,
+          "vulnerable": 65
         },
         "kept_localized": {
-          "None": 22,
-          "diff": 115
+          "None": 19,
+          "diff": 101
         },
         "kept_sink_kind": {
           "call": 37,
-          "function": 100
+          "function": 83
         },
         "skipped": {
           "cwe_not_in_kb": 272,
@@ -395,25 +525,63 @@
       "duplicate": 14,
       "in_test": 26
     },
-    "function_level_dropped": 1344,
+    "file_bytes": 1855979,
+    "function_level_dropped": 1394,
+    "graph_added": 68,
+    "graph_removed": {},
     "kept": {
-      "patched": 179,
-      "vulnerable": 223
+      "patched": 167,
+      "vulnerable": 202
     },
     "kept_localized": {
-      "None": 118,
-      "comment": 74,
-      "diff": 210
+      "None": 167,
+      "comment": 23,
+      "diff": 179
     },
     "kept_sink_kind": {
-      "call": 168,
-      "function": 234
+      "call": 185,
+      "function": 184
     },
-    "label_skew_dropped": 66,
+    "label_skew_dropped": 0,
+    "over_size_limit": false,
     "skipped": {
-      "cwe_not_in_kb": 4970,
+      "cwe_not_in_kb": 4836,
       "no_sink": 3497,
       "too_long": 278
+    },
+    "source_counts": {
+      "codeql-python": 2,
+      "codeql-tests": 23,
+      "cvefixes-python": 13,
+      "juliet-nist": 64,
+      "primevul": 134,
+      "pyvul": 11,
+      "pyvul-graph": 2,
+      "secvuleval": 120
+    },
+    "too_long_dropped": {},
+    "trace_shares": {
+      "juliet": {
+        "examples": 64,
+        "multi_block": 18,
+        "multi_block_share": 0.2812,
+        "sink_only": 0,
+        "sink_only_share": 0.0
+      },
+      "py_codeql": {
+        "examples": 2,
+        "multi_block": 0,
+        "multi_block_share": 0.0,
+        "sink_only": 0,
+        "sink_only_share": 0.0
+      },
+      "py_pyvul": {
+        "examples": 2,
+        "multi_block": 2,
+        "multi_block_share": 1.0,
+        "sink_only": 0,
+        "sink_only_share": 0.0
+      }
     }
   }
 }

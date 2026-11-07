@@ -1,0 +1,208 @@
+{
+  "source": "codeql-python",
+  "track": "py_codeql",
+  "seed": 42,
+  "depth": 5,
+  "split_group": "codeql:{percorso del file} (R21)",
+  "val_pct": 5,
+  "test_pct": 10,
+  "p_callers": 0.7,
+  "files": 28,
+  "files_not_annotated": 3,
+  "roots": 12,
+  "roots_skipped_not_annotated": 0,
+  "per_root": [
+    {
+      "root": "CWE-022-PathInjection",
+      "records": 2,
+      "labelled": 2,
+      "examples": 2,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-022-TarSlip",
+      "records": 0,
+      "labelled": 0,
+      "examples": 0,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-078-CommandInjection",
+      "records": 13,
+      "labelled": 12,
+      "examples": 12,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-078-UnsafeShellCommandConstruction",
+      "records": 14,
+      "labelled": 14,
+      "examples": 14,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-079-Jinja2WithoutEscaping",
+      "records": 0,
+      "labelled": 0,
+      "examples": 0,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-079-ReflectedXss",
+      "records": 0,
+      "labelled": 0,
+      "examples": 0,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-089-SqlInjection",
+      "records": 10,
+      "labelled": 9,
+      "examples": 9,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-089-SqlInjection-local-threat-model",
+      "records": 0,
+      "labelled": 0,
+      "examples": 0,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-094-CodeInjection",
+      "records": 5,
+      "labelled": 4,
+      "examples": 4,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-502-UnsafeDeserialization",
+      "records": 5,
+      "labelled": 5,
+      "examples": 5,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-601-UrlRedirect",
+      "records": 30,
+      "labelled": 27,
+      "examples": 27,
+      "seconds": 0.0
+    },
+    {
+      "root": "CWE-918-ServerSideRequestForgery",
+      "records": 46,
+      "labelled": 40,
+      "examples": 40,
+      "seconds": 0.0
+    }
+  ],
+  "records": 125,
+  "skipped_unknown_file": 0,
+  "skipped_not_annotated": 0,
+  "skipped_other_cwe": 3,
+  "skipped_ambiguous": 9,
+  "truncated_dropped": 0,
+  "anonymize_errors": 0,
+  "leaky_dropped": 0,
+  "leaky_words": {},
+  "duplicates_dropped": 0,
+  "conflicts_dropped": 0,
+  "examples_before_conflicts": 113,
+  "examples_after_conflicts": 113,
+  "written": {
+    "train": 94,
+    "val": 2,
+    "test": 17
+  },
+  "labels": {
+    "1": 68,
+    "0": 45
+  },
+  "labels_by_split": {
+    "train": {
+      "1": 55,
+      "0": 39
+    },
+    "val": {
+      "1": 2,
+      "0": 0
+    },
+    "test": {
+      "1": 11,
+      "0": 6
+    }
+  },
+  "per_cwe": {
+    "CWE-22": {
+      "train": 2,
+      "val": 0,
+      "test": 0
+    },
+    "CWE-502": {
+      "train": 5,
+      "val": 0,
+      "test": 0
+    },
+    "CWE-601": {
+      "train": 27,
+      "val": 0,
+      "test": 0
+    },
+    "CWE-78": {
+      "train": 13,
+      "val": 0,
+      "test": 13
+    },
+    "CWE-89": {
+      "train": 9,
+      "val": 0,
+      "test": 0
+    },
+    "CWE-918": {
+      "train": 38,
+      "val": 2,
+      "test": 0
+    },
+    "CWE-94": {
+      "train": 0,
+      "val": 0,
+      "test": 4
+    }
+  },
+  "groups": {
+    "train": 10,
+    "val": 1,
+    "test": 2
+  },
+  "multi_block_share": 0.0,
+  "sink_only_share": {
+    "overall": 0.0,
+    "by_label": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "by_track": {
+      "py_codeql": 0.0
+    }
+  },
+  "forbidden_hits": 0,
+  "audit_vs_test": {
+    "bow_accuracy": 0.6471,
+    "structure_accuracy": 0.6471,
+    "stump_accuracies": {
+      "prompt_chars": 0.5882,
+      "code_chars": 0.6471,
+      "code_lines": 0.6471,
+      "braces": 0.6471,
+      "numbers": 0.6471,
+      "n_blocks": 0.6471,
+      "max_depth": 0.6471,
+      "sink_block_lines": 0.6471,
+      "fn_tokens": 0.6471,
+      "v_tokens": 0.6471,
+      "text_placeholder": 0.6471
+    }
+  },
+  "seconds": 0.1
+}

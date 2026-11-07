@@ -1,0 +1,53 @@
+{
+  "rows_total": 167,
+  "rows_resolved": 38,
+  "resolve_rate": 0.2275,
+  "examples": 76,
+  "examples_per_repo": {
+    "https://github.com/TandoorRecipes/recipes": 10,
+    "https://github.com/bmaltais/kohya_ss": 2,
+    "https://github.com/boxug/trape": 4,
+    "https://github.com/janeczku/calibre-web": 14,
+    "https://github.com/mapoor/voteapp": 8,
+    "https://github.com/nautobot/nautobot": 12,
+    "https://github.com/openstack/nova": 2,
+    "https://github.com/parisneo/lollms-webui": 6,
+    "https://github.com/python/cpython": 2,
+    "https://github.com/rohe/pysaml2": 10,
+    "https://github.com/zwczou/weixin-python": 6
+  },
+  "mean_examples_per_repo": 6.91,
+  "seconds": 360.7,
+  "seconds_per_row": 2.16,
+  "bytes_on_disk": 1456654135,
+  "mb_on_disk": 1389.17,
+  "counts": {
+    "bytes_on_disk": 1456654135,
+    "commits_fetched": 48,
+    "fixed_side_not_found": 81,
+    "fixed_side_other_cwe": 1,
+    "forbidden_hits_reported": 2,
+    "function_not_found": 23,
+    "pairs": 38,
+    "records_missing_before": 24,
+    "repos": 20,
+    "rows_considered": 167,
+    "rows_resolved": 38,
+    "rows_total": 167,
+    "rows_usable": 311,
+    "seconds": 360.7
+  },
+  "removed": {
+    "duplicates": 4,
+    "conflicts": 0
+  },
+  "rows_in_dataset": 3543,
+  "written": {
+    "train": 54,
+    "val": 2,
+    "test": 16
+  },
+  "repos": 20,
+  "max_rows_per_repo": null,
+  "split_key": "commit (prepare_data.split_of, R32)"
+}

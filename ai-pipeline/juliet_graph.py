@@ -54,6 +54,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+# NIST (Cloudflare) risponde 403 allo user-agent predefinito di urllib: ne serve uno che dica chi scarica.
+USER_AGENT = "tunatron-data-pipeline (Juliet download for SAST fine-tuning data)"
+
+
 def fetch_juliet(dest_dir: Path) -> Path:
     """Percorso dello zip di Juliet in `dest_dir`: lo scarica se manca, poi ne verifica lo sha256 (`ValueError` se diverso).
 
@@ -66,7 +70,8 @@ def fetch_juliet(dest_dir: Path) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         part = zip_path.with_name(zip_path.name + ".part")
         try:
-            with urllib.request.urlopen(JULIET_URL, timeout=60) as response, part.open("wb") as out:
+            request = urllib.request.Request(JULIET_URL, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=60) as response, part.open("wb") as out:
                 shutil.copyfileobj(response, out)
             found = _sha256(part)
             if found != JULIET_SHA256:
